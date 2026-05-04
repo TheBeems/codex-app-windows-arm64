@@ -1,0 +1,87 @@
+# Codex App Windows ARM64
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+🌐 English | [한국어](README.ko.md)
+
+Codex App Windows ARM64 is an unofficial repackaging script for running the official Windows x64 Codex app on Windows on ARM. It takes an installed Microsoft Store Codex package, replaces the runtime and native payloads with ARM64-compatible builds where possible, and produces a locally signed ARM64 MSIX package.
+
+This project is intended to be maintained until OpenAI provides official Windows ARM64 support for the Codex app.
+
+## Disclaimer
+
+This project is not affiliated with, endorsed by, sponsored by, or officially supported by OpenAI. It is an independent community tool for local experimentation and compatibility work.
+
+OpenAI, Codex, and ChatGPT are trademarks of OpenAI. All other trademarks are the property of their respective owners.
+
+## Requirements
+
+- A Windows on ARM device.
+- The official Codex app installed from Microsoft Store as the x64 package.
+- PowerShell 7 (`pwsh`) is recommended. Windows PowerShell is used only as a fallback.
+- Node.js with `node`, `npm`, and `npx` available on `PATH`.
+- Windows SDK tools, including `makeappx.exe` and `signtool.exe`.
+- Visual Studio C++ desktop build tools with the ARM64 C++ toolchain.
+- Internet access for downloading Electron, Node.js, Codex helper binaries, ripgrep, and native module build dependencies.
+
+## Quick Install From Release
+
+Download the release zip from the [GitHub Releases](https://github.com/airtaxi/codex-app-windows-arm64/releases) page, extract it, and run:
+
+```bat
+Install.bat
+```
+
+`Install.bat` runs `Install.ps1`, checks that the MSIX signer matches the included certificate, imports the local certificate into the trusted certificate store when needed, and installs the generated MSIX package.
+
+## Build
+
+Run the build wrapper from this repository:
+
+```bat
+Build-CodexWoA.bat -SourceMode Installed -Force
+```
+
+`-SourceMode Installed` uses the official x64 Codex package already installed from Microsoft Store.
+
+`-SourceMode StoreLatest` does not download an MSIX directly. It opens Microsoft Store so you can install or update Codex officially, then continues by using the installed x64 package.
+
+The default output directory is `dist`.
+
+## Outputs
+
+A successful build creates:
+
+- `dist\Codex-WoA_<version>_arm64.msix`
+- `dist\cert\CodexWoA.cer`
+- `dist\Install.ps1`
+- `dist\Install.bat`
+- `dist\build-report.json`
+
+The certificate is generated locally when needed and is not committed to the repository.
+
+## What The Script Changes
+
+- Rewrites `AppxManifest.xml` for an ARM64 package identity.
+- Replaces the Electron runtime with `win32-arm64`.
+- Replaces bundled Node.js with `win-arm64`.
+- Rebuilds in-process native modules such as `better-sqlite3` and `node-pty` for ARM64.
+- Disables the native Windows updater for the locally signed package.
+- Replaces ARM64 helper executables when upstream ARM64 assets are available.
+- Allows x64 fallback only for separate out-of-process tools where ARM64 replacement is unavailable.
+
+## Current Support Status
+
+The package is a best-effort compatibility build for Windows on ARM. Basic app launch, login flow, conversation use, ARM64 `node-pty`, and ARM64 `rg.exe` replacement have been validated locally, but this is not a substitute for official OpenAI support.
+
+Reports and pull requests are welcome, especially for native dependency updates, helper binary replacement, packaging validation, and Windows on ARM runtime behavior.
+
+## License
+
+Codex App Windows ARM64 is licensed under the [MIT License](LICENSE).
+
+## Author
+
+Created by [Howon Lee (airtaxi)](https://github.com/airtaxi).
+
+Built with help from OpenAI Codex.
