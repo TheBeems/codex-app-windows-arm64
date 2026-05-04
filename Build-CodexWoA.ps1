@@ -1,0 +1,1665 @@
+#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [ValidateSet("Prompt", "Installed", "StoreLatest")]
+    [string]$SourceMode = "Prompt",
+
+    [string]$OutputDir = "",
+
+    [string]$PackageIdentity = "OpenAI.Codex.WoA",
+
+    [string]$DisplayName = "Codex WoA",
+
+    [string]$PublisherSubject = "CN=Codex WoA Local",
+
+    [string]$CodexReleaseTag = "latest",
+
+    [switch]$InstallVsDependencies,
+
+    [switch]$SkipVsDependencyCheck,
+
+    [switch]$KeepWorkDir,
+
+    [switch]$Force
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$script:ScriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $PSScriptRoot
+}
+else {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+$script:DefaultOutputDir = Join-Path $script:ScriptRoot "dist"
+
+$script:Report = [ordered]@{
+    startedAt = (Get-Date).ToString("o")
+    sourceMode = $SourceMode
+    packageIdentity = $PackageIdentity
+    displayName = $DisplayName
+    publisherSubject = $PublisherSubject
+    versions = [ordered]@{}
+    replacements = New-Object System.Collections.Generic.List[object]
+    warnings = New-Object System.Collections.Generic.List[string]
+    validation = [ordered]@{}
+    outputs = [ordered]@{}
+}
+
+function Write-Step {
+    param([string]$Message)
+    Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function Write-Warn {
+    param([string]$Message)
+    $script:Report.warnings.Add($Message)
+    Write-Warning $Message
+}
+
+function Add-Replacement {
+    param(
+        [string]$Name,
+        [string]$Status,
+        [string]$Detail = ""
+    )
+
+    $script:Report.replacements.Add([ordered]@{
+        name = $Name
+        status = $Status
+        detail = $Detail
+    })
+}
+
+function Remove-IfExists {
+    param([string]$Path)
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+}
+
+function New-CleanDirectory {
+    param([string]$Path)
+    Remove-IfExists $Path
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    return (Resolve-Path -LiteralPath $Path).Path
+}
+
+function Set-TextUtf8NoBom {
+    param(
+        [string]$Path,
+        [string]$Value
+    )
+
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Value, $encoding)
+}
+
+function Require-CommandPath {
+    param([string]$Name)
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($null -eq $command) {
+        throw "Required command not found: $Name"
+    }
+    return $command.Source
+}
+
+function Invoke-Checked {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments,
+        [int[]]$SuccessExitCodes = @(0)
+    )
+
+    Write-Verbose ("Running: {0} {1}" -f $FilePath, ($Arguments -join " "))
+    & $FilePath @Arguments | Out-Host
+    $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+    if ($SuccessExitCodes -notcontains $exitCode) {
+        throw "Command failed with exit code $exitCode`: $FilePath $($Arguments -join ' ')"
+    }
+    return $exitCode
+}
+
+function Copy-DirectoryRobust {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    & robocopy $Source $Destination /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Host
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -gt 7) {
+        throw "robocopy failed with exit code $exitCode"
+    }
+}
+
+function Copy-DirectoryMergeRobust {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    & robocopy $Source $Destination /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Host
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -gt 7) {
+        throw "robocopy merge failed with exit code $exitCode"
+    }
+}
+
+function Find-WindowsKitTool {
+    param([string]$ToolName)
+
+    $preferredArches = @("arm64", "x64", "x86")
+    if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne "Arm64") {
+        $preferredArches = @("x64", "arm64", "x86")
+    }
+
+    $kitRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+    if (Test-Path -LiteralPath $kitRoot) {
+        $versions = Get-ChildItem -LiteralPath $kitRoot -Directory |
+            Where-Object { $_.Name -match "^\d+\.\d+\.\d+\.\d+$" } |
+            Sort-Object { [version]$_.Name } -Descending
+
+        foreach ($version in $versions) {
+            foreach ($arch in $preferredArches) {
+                $candidate = Join-Path $version.FullName (Join-Path $arch $ToolName)
+                if (Test-Path -LiteralPath $candidate) {
+                    return $candidate
+                }
+            }
+        }
+    }
+
+    $command = Get-Command $ToolName -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
+    throw "Could not find Windows SDK tool: $ToolName"
+}
+
+function Download-File {
+    param(
+        [string]$Url,
+        [string]$Destination
+    )
+
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
+    Write-Host "Downloading $Url"
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination
+    if (-not (Test-Path -LiteralPath $Destination) -or (Get-Item -LiteralPath $Destination).Length -eq 0) {
+        throw "Downloaded file is empty: $Destination"
+    }
+}
+
+function Expand-ZipClean {
+    param(
+        [string]$ZipPath,
+        [string]$Destination
+    )
+
+    New-CleanDirectory $Destination | Out-Null
+    Expand-Archive -LiteralPath $ZipPath -DestinationPath $Destination -Force
+}
+
+function Get-PeMachine {
+    param([string]$Path)
+
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $reader = New-Object System.IO.BinaryReader($stream)
+        if ($reader.ReadUInt16() -ne 0x5A4D) {
+            return "NotPE"
+        }
+
+        $stream.Seek(0x3C, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $peOffset = $reader.ReadUInt32()
+        $stream.Seek($peOffset, [System.IO.SeekOrigin]::Begin) | Out-Null
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            return "NotPE"
+        }
+
+        $machine = $reader.ReadUInt16()
+        switch ($machine) {
+            0x014c { return "x86" }
+            0x8664 { return "x64" }
+            0xaa64 { return "arm64" }
+            0x01c4 { return "arm" }
+            default { return ("0x{0:X4}" -f $machine) }
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+function Get-RelativePath {
+    param(
+        [string]$Root,
+        [string]$Path
+    )
+
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd("\", "/")
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    return $pathFull.Substring($rootFull.Length + 1).Replace("/", "\")
+}
+
+function Get-InstalledCodexPackageOrNull {
+    $package = Get-AppxPackage -Name "OpenAI.Codex" |
+        Where-Object { $_.Architecture -eq "X64" } |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
+
+    if ($null -eq $package) {
+        return $null
+    }
+
+    if (-not (Test-Path -LiteralPath $package.InstallLocation)) {
+        throw "Installed package path does not exist: $($package.InstallLocation)"
+    }
+
+    return $package
+}
+
+function Get-InstalledCodexPackage {
+    $package = Get-InstalledCodexPackageOrNull
+    if ($null -eq $package) {
+        throw "Installed OpenAI.Codex x64 package was not found. Install Codex from Microsoft Store first or use -SourceMode StoreLatest."
+    }
+
+    return $package
+}
+
+function Resolve-SourceMode {
+    param([string]$RequestedMode)
+
+    if ($RequestedMode -ne "Prompt") {
+        return $RequestedMode
+    }
+
+    Write-Host ""
+    Write-Host "Select Codex x64 source package:"
+    Write-Host "  1. Installed Microsoft Store package"
+    Write-Host "  2. Open Microsoft Store, then use installed package"
+    $choice = Read-Host "Choice [1/2]"
+    switch ($choice) {
+        "2" { return "StoreLatest" }
+        default { return "Installed" }
+    }
+}
+
+function Copy-InstalledSource {
+    param(
+        [string]$Destination
+    )
+
+    $package = Get-InstalledCodexPackage
+    Write-Step "Copying installed source package $($package.PackageFullName)"
+    New-CleanDirectory $Destination | Out-Null
+    Copy-DirectoryRobust $package.InstallLocation $Destination
+
+    $script:Report.source = [ordered]@{
+        kind = "Installed"
+        packageFullName = $package.PackageFullName
+        version = $package.Version.ToString()
+        installLocation = $package.InstallLocation
+    }
+
+    return $Destination
+}
+
+function Open-CodexStorePage {
+    param([string]$ProductId = "9PLM9XGG6VKS")
+
+    $storeUri = "ms-windows-store://pdp/?ProductId=$ProductId"
+    $webUri = "https://apps.microsoft.com/detail/$ProductId"
+    Write-Step "Opening Codex in Microsoft Store"
+
+    try {
+        Start-Process $storeUri | Out-Null
+    }
+    catch {
+        Write-Warn "Could not open Microsoft Store URI: $($_.Exception.Message)"
+        try {
+            Start-Process $webUri | Out-Null
+        }
+        catch {
+            Write-Warn "Could not open Store web page: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Copy-StoreInstalledSource {
+    param(
+        [string]$Destination
+    )
+
+    Open-CodexStorePage
+
+    $installed = Get-InstalledCodexPackageOrNull
+    if ($null -ne $installed) {
+        Write-Host "Installed x64 Codex was found: $($installed.PackageFullName)"
+    }
+    else {
+        Write-Host "Install Codex from Microsoft Store, then return here."
+    }
+
+    Read-Host "Press Enter after Codex x64 is installed or updated from Microsoft Store"
+    $copied = Copy-InstalledSource $Destination
+    $script:Report.source.kind = "StoreInstalled"
+    $script:Report.source.storePageOpened = $true
+    return $copied
+}
+
+function Assert-SourceShape {
+    param([string]$PackageRoot)
+
+    $required = @(
+        "AppxManifest.xml",
+        "app\Codex.exe",
+        "app\resources\app.asar",
+        "app\resources\app.asar.unpacked"
+    )
+
+    foreach ($relative in $required) {
+        $path = Join-Path $PackageRoot $relative
+        if (-not (Test-Path -LiteralPath $path)) {
+            throw "Source package is missing required file: $relative"
+        }
+    }
+}
+
+function Read-ElectronVersion {
+    param(
+        [string]$AppDir,
+        [string]$AsarExtractDir
+    )
+
+    $versionFile = Join-Path $AppDir "version"
+    if (Test-Path -LiteralPath $versionFile) {
+        $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+        if ($version -match "^\d+\.\d+\.\d+") {
+            return $version
+        }
+    }
+
+    $packageJson = Join-Path $AsarExtractDir "package.json"
+    if (Test-Path -LiteralPath $packageJson) {
+        $package = Get-Content -LiteralPath $packageJson -Raw | ConvertFrom-Json
+        if ($package.devDependencies.electron) {
+            return [string]$package.devDependencies.electron
+        }
+        if ($package.dependencies.electron) {
+            return [string]$package.dependencies.electron
+        }
+    }
+
+    throw "Could not determine Electron version"
+}
+
+function Read-NodeVersion {
+    param([string]$NodeExe)
+
+    if (Test-Path -LiteralPath $NodeExe) {
+        $version = (Get-Item -LiteralPath $NodeExe).VersionInfo.ProductVersion
+        if ($version -match "^\d+\.\d+\.\d+") {
+            return $Matches[0]
+        }
+    }
+
+    throw "Could not determine bundled Node.js version from $NodeExe"
+}
+
+function Use-Asar {
+    param(
+        [string[]]$Arguments
+    )
+
+    Invoke-Checked "npx" (@("--yes", "@electron/asar") + $Arguments)
+}
+
+function Extract-AppAsar {
+    param(
+        [string]$ResourcesDir,
+        [string]$Destination
+    )
+
+    $asarPath = Join-Path $ResourcesDir "app.asar"
+    New-CleanDirectory $Destination | Out-Null
+    Use-Asar @("extract", $asarPath, $Destination)
+
+    $unpacked = Join-Path $ResourcesDir "app.asar.unpacked"
+    if (Test-Path -LiteralPath $unpacked) {
+        Copy-DirectoryMergeRobust $unpacked $Destination
+    }
+}
+
+function Repack-AppAsar {
+    param(
+        [string]$ExtractedDir,
+        [string]$ResourcesDir
+    )
+
+    $asarPath = Join-Path $ResourcesDir "app.asar"
+    $unpackedPath = Join-Path $ResourcesDir "app.asar.unpacked"
+    Remove-IfExists $asarPath
+    Remove-IfExists $unpackedPath
+    Use-Asar @("pack", $ExtractedDir, $asarPath, "--unpack", "{*.node,*.dll,*.exe}")
+}
+
+function Install-Arm64ElectronRuntime {
+    param(
+        [string]$AppDir,
+        [string]$ElectronVersion,
+        [string]$CacheDir
+    )
+
+    Write-Step "Replacing Electron runtime with win32-arm64 v$ElectronVersion"
+    $zipName = "electron-v$ElectronVersion-win32-arm64.zip"
+    $zipPath = Join-Path $CacheDir $zipName
+    $url = "https://github.com/electron/electron/releases/download/v$ElectronVersion/$zipName"
+    if (-not (Test-Path -LiteralPath $zipPath)) {
+        Download-File $url $zipPath
+    }
+
+    $runtimeDir = Join-Path $CacheDir "electron-win32-arm64-$ElectronVersion"
+    Expand-ZipClean $zipPath $runtimeDir
+
+    $resourcesDir = Join-Path $AppDir "resources"
+    $savedResources = Join-Path (Split-Path -Parent $AppDir) "resources.saved"
+    Remove-IfExists $savedResources
+    Move-Item -LiteralPath $resourcesDir -Destination $savedResources
+
+    Get-ChildItem -LiteralPath $AppDir -Force | Remove-Item -Recurse -Force
+    Copy-DirectoryRobust $runtimeDir $AppDir
+    Remove-IfExists (Join-Path $AppDir "resources")
+    Move-Item -LiteralPath $savedResources -Destination $resourcesDir
+
+    $electronExe = Join-Path $AppDir "electron.exe"
+    $codexExe = Join-Path $AppDir "Codex.exe"
+    if (-not (Test-Path -LiteralPath $electronExe)) {
+        throw "Electron runtime did not contain electron.exe"
+    }
+    Move-Item -LiteralPath $electronExe -Destination $codexExe -Force
+
+    Add-Replacement "electron-runtime" "arm64" $zipName
+}
+
+function Install-Arm64Node {
+    param(
+        [string]$ResourcesDir,
+        [string]$NodeVersion,
+        [string]$CacheDir
+    )
+
+    Write-Step "Replacing Node.js with win-arm64 v$NodeVersion"
+    $zipName = "node-v$NodeVersion-win-arm64.zip"
+    $zipPath = Join-Path $CacheDir $zipName
+    $url = "https://nodejs.org/dist/v$NodeVersion/$zipName"
+    if (-not (Test-Path -LiteralPath $zipPath)) {
+        Download-File $url $zipPath
+    }
+
+    $nodeDir = Join-Path $CacheDir "node-win-arm64-$NodeVersion"
+    Expand-ZipClean $zipPath $nodeDir
+    $nodeExe = Get-ChildItem -LiteralPath $nodeDir -Recurse -File -Filter "node.exe" | Select-Object -First 1
+    if ($null -eq $nodeExe) {
+        throw "Node archive did not contain node.exe"
+    }
+
+    Copy-Item -LiteralPath $nodeExe.FullName -Destination (Join-Path $ResourcesDir "node.exe") -Force
+    Add-Replacement "node.exe" "arm64" $zipName
+}
+
+function Get-GitHubRelease {
+    param(
+        [string]$Owner,
+        [string]$Repo,
+        [string]$Tag
+    )
+
+    $headers = @{ Accept = "application/vnd.github+json" }
+    if ($Tag -eq "latest") {
+        return Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/latest" -Headers $headers
+    }
+
+    return Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/tags/$Tag" -Headers $headers
+}
+
+function Download-GitHubReleaseAsset {
+    param(
+        [object]$Release,
+        [string]$AssetName,
+        [string]$Destination
+    )
+
+    $asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
+    if ($null -eq $asset) {
+        throw "Release asset not found: $AssetName"
+    }
+
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        Download-File $asset.browser_download_url $Destination
+    }
+
+    return $Destination
+}
+
+function Install-Arm64CodexHelpers {
+    param(
+        [string]$ResourcesDir,
+        [string]$CacheDir,
+        [string]$ReleaseTag
+    )
+
+    Write-Step "Replacing Codex helper executables from openai/codex"
+    $release = Get-GitHubRelease "openai" "codex" $ReleaseTag
+    $script:Report.versions.codexRelease = $release.tag_name
+
+    $mapping = @(
+        @{ asset = "codex-aarch64-pc-windows-msvc.exe"; target = "codex.exe"; required = $false },
+        @{ asset = "codex-command-runner-aarch64-pc-windows-msvc.exe"; target = "codex-command-runner.exe"; required = $false },
+        @{ asset = "codex-windows-sandbox-setup-aarch64-pc-windows-msvc.exe"; target = "codex-windows-sandbox-setup.exe"; required = $false },
+        @{ asset = "codex-app-server-aarch64-pc-windows-msvc.exe"; target = "codex-app-server.exe"; required = $false },
+        @{ asset = "codex-responses-api-proxy-aarch64-pc-windows-msvc.exe"; target = "codex-responses-api-proxy.exe"; required = $false }
+    )
+
+    foreach ($item in $mapping) {
+        $targetPath = Join-Path $ResourcesDir $item.target
+        if (-not (Test-Path -LiteralPath $targetPath) -and -not $item.required) {
+            continue
+        }
+
+        try {
+            $downloadPath = Join-Path $CacheDir $item.asset
+            Download-GitHubReleaseAsset $release $item.asset $downloadPath | Out-Null
+            Copy-Item -LiteralPath $downloadPath -Destination $targetPath -Force
+            Add-Replacement $item.target "arm64" $item.asset
+        }
+        catch {
+            if ($item.required) {
+                throw
+            }
+            Write-Warn "Could not replace $($item.target); keeping original out-of-process fallback. $($_.Exception.Message)"
+            Add-Replacement $item.target "fallback" $_.Exception.Message
+        }
+    }
+}
+
+function Install-Arm64Ripgrep {
+    param(
+        [string]$ResourcesDir,
+        [string]$CacheDir
+    )
+
+    Write-Step "Replacing rg.exe with ripgrep arm64"
+    $release = Get-GitHubRelease "BurntSushi" "ripgrep" "latest"
+    $tag = $release.tag_name.TrimStart("v")
+    $assetName = "ripgrep-$tag-aarch64-pc-windows-msvc.zip"
+    $zipPath = Join-Path $CacheDir $assetName
+    Download-GitHubReleaseAsset $release $assetName $zipPath | Out-Null
+
+    $ripgrepDir = Join-Path $CacheDir "ripgrep-arm64-$tag"
+    Expand-ZipClean $zipPath $ripgrepDir
+    $rgExe = Get-ChildItem -LiteralPath $ripgrepDir -Recurse -File -Filter "rg.exe" | Select-Object -First 1
+    if ($null -eq $rgExe) {
+        throw "ripgrep archive did not contain rg.exe"
+    }
+
+    Copy-Item -LiteralPath $rgExe.FullName -Destination (Join-Path $ResourcesDir "rg.exe") -Force
+    Add-Replacement "rg.exe" "arm64" $assetName
+}
+
+function Get-NpmPackageVersion {
+    param(
+        [string]$AsarDir,
+        [string]$PackageName
+    )
+
+    $packageJson = Join-Path $AsarDir (Join-Path "node_modules\$PackageName" "package.json")
+    if (-not (Test-Path -LiteralPath $packageJson)) {
+        $rootPackageJson = Join-Path $AsarDir "package.json"
+        $rootPackage = Get-Content -LiteralPath $rootPackageJson -Raw | ConvertFrom-Json
+        $property = $rootPackage.dependencies.PSObject.Properties[$PackageName]
+        $range = if ($null -ne $property) { [string]$property.Value } else { "" }
+        if ([string]::IsNullOrWhiteSpace($range)) {
+            throw "Could not find dependency version for $PackageName"
+        }
+        return $range
+    }
+
+    $package = Get-Content -LiteralPath $packageJson -Raw | ConvertFrom-Json
+    return [string]$package.version
+}
+
+function Get-VsWherePath {
+    $candidate = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path -LiteralPath $candidate) {
+        return $candidate
+    }
+
+    $command = Get-Command "vswhere.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+
+    return $null
+}
+
+function Get-VisualStudioInstances {
+    $vswhere = Get-VsWherePath
+    if ($null -eq $vswhere) {
+        return @()
+    }
+
+    $json = & $vswhere -all -format json
+    if ([string]::IsNullOrWhiteSpace(($json -join ""))) {
+        return @()
+    }
+
+    $instances = $json | ConvertFrom-Json
+    if ($null -eq $instances) {
+        return @()
+    }
+
+    return @($instances | Where-Object { $_.isComplete -eq $true -and $_.installationPath })
+}
+
+function Get-InstalledVsComponentIds {
+    param([string]$InstallationPath)
+
+    $instanceId = Split-Path -Leaf $InstallationPath
+    $instanceDir = Join-Path "C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances" $instanceId
+    $stateJson = Join-Path $instanceDir "state.json"
+    if (Test-Path -LiteralPath $stateJson) {
+        try {
+            $state = Get-Content -LiteralPath $stateJson -Raw | ConvertFrom-Json
+            if ($state.selectedPackages) {
+                return @($state.selectedPackages.PSObject.Properties.Name)
+            }
+        }
+        catch {
+            Write-Verbose "Could not read Visual Studio state.json: $($_.Exception.Message)"
+        }
+    }
+
+    return @()
+}
+
+function Test-VsComponentInstalled {
+    param(
+        [string]$ComponentId,
+        [string]$InstallationPath
+    )
+
+    $vswhere = Get-VsWherePath
+    if ($null -eq $vswhere) {
+        return $false
+    }
+
+    $output = & $vswhere -all -requires $ComponentId -property installationPath
+    return @($output) -contains $InstallationPath
+}
+
+function Get-VsPlanComponentIds {
+    param(
+        [string]$InstallationPath,
+        [string]$Pattern
+    )
+
+    $instancesRoot = "C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances"
+    if (-not (Test-Path -LiteralPath $instancesRoot)) {
+        return @()
+    }
+
+    $plans = Get-ChildItem -LiteralPath $instancesRoot -Recurse -File -Filter "plan.xml" -ErrorAction SilentlyContinue
+    foreach ($plan in $plans) {
+        try {
+            [xml]$xml = Get-Content -LiteralPath $plan.FullName -Raw
+            $ns = New-Object Xml.XmlNamespaceManager($xml.NameTable)
+            $ns.AddNamespace("s", "http://schemas.datacontract.org/2004/07/Microsoft.VisualStudio.Setup")
+            $ids = $xml.SelectNodes("//s:PackagePlan/s:Id", $ns) | ForEach-Object { $_.InnerText }
+            $matchedIds = @($ids |
+                ForEach-Object { ($_ -split ",")[0] } |
+                Where-Object { $_ -match $Pattern } |
+                Sort-Object -Unique)
+            if ($matchedIds.Count -gt 0) {
+                return @($matchedIds)
+            }
+        }
+        catch {
+            Write-Verbose "Could not inspect Visual Studio plan $($plan.FullName): $($_.Exception.Message)"
+        }
+    }
+
+    return @()
+}
+
+function Get-Arm64CppComponentIds {
+    param(
+        [string]$InstallationPath,
+        [string]$ToolsetVersion
+    )
+
+    $toolsetPrefix = ($ToolsetVersion -split "\.")[0..1] -join "."
+    $escapedPrefix = [regex]::Escape($toolsetPrefix)
+    $arm64ToolComponents = @(Get-VsPlanComponentIds $InstallationPath "^Microsoft\.VisualStudio\.Component\.VC\.$escapedPrefix\.\d+\.\d+\.ARM64$")
+    if ($arm64ToolComponents.Count -gt 0) {
+        return @(($arm64ToolComponents | Sort-Object -Descending | Select-Object -First 1))
+    }
+
+    return @("Microsoft.VisualStudio.Component.VC.Tools.ARM64")
+}
+
+function Find-VisualStudioCppInstance {
+    $instances = Get-VisualStudioInstances
+    foreach ($instance in ($instances | Sort-Object installationVersion -Descending)) {
+        $toolsRoot = Join-Path $instance.installationPath "VC\Tools\MSVC"
+        if (-not (Test-Path -LiteralPath $toolsRoot)) {
+            continue
+        }
+
+        $toolset = Get-ChildItem -LiteralPath $toolsRoot -Directory |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1
+        if ($null -eq $toolset) {
+            continue
+        }
+
+        return [pscustomobject][ordered]@{
+            installationPath = [string]$instance.installationPath
+            displayName = [string]$instance.displayName
+            installationVersion = [string]$instance.installationVersion
+            toolsetVersion = [string]$toolset.Name
+            toolsetPath = [string]$toolset.FullName
+        }
+    }
+
+    return $null
+}
+
+function Test-Arm64CppToolchainFiles {
+    param([string]$ToolsetPath)
+
+    $compilerCandidates = @(
+        (Join-Path $ToolsetPath "bin\Hostarm64\arm64\cl.exe"),
+        (Join-Path $ToolsetPath "bin\Hostx64\arm64\cl.exe"),
+        (Join-Path $ToolsetPath "bin\Hostx86\arm64\cl.exe")
+    )
+    $hasCompiler = $false
+    foreach ($candidate in $compilerCandidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            $hasCompiler = $true
+            break
+        }
+    }
+
+    $arm64LibDir = Join-Path $ToolsetPath "lib\arm64"
+    $hasArm64Libs = $false
+    if (Test-Path -LiteralPath $arm64LibDir) {
+        $hasArm64Libs = $null -ne (Get-ChildItem -LiteralPath $arm64LibDir -File -Filter "*.lib" -ErrorAction SilentlyContinue | Select-Object -First 1)
+    }
+
+    return ($hasCompiler -and $hasArm64Libs)
+}
+
+function Get-VisualStudioDependencyGuidance {
+    param(
+        [object]$VsInfo,
+        [string[]]$ComponentIds
+    )
+
+    $componentList = ($ComponentIds | ForEach-Object { "  - $_" }) -join "`n"
+    $installCommand = if ($null -ne $VsInfo) {
+        $setup = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+        $addArgs = ($ComponentIds | ForEach-Object { "--add `"$($_)`"" }) -join " "
+        "`"$setup`" modify --installPath `"$($VsInfo.installationPath)`" $addArgs --quiet --norestart --wait"
+    }
+    else {
+        "Install Visual Studio 2026/2022 C++ desktop build tools, then add ARM64 C++ tools."
+    }
+
+    return @"
+Visual Studio ARM64 C++ tools are required before rebuilding native modules.
+
+Install these Visual Studio components:
+$componentList
+
+You can either:
+  1. Re-run this script with -InstallVsDependencies, or
+  2. Open Visual Studio Installer > Modify > Individual components and install ARM64 C++ tools, or
+  3. Run this command:
+     $installCommand
+"@
+}
+
+function Install-VisualStudioComponents {
+    param(
+        [object]$VsInfo,
+        [string[]]$ComponentIds
+    )
+
+    $setup = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+    if (-not (Test-Path -LiteralPath $setup)) {
+        throw "Visual Studio setup.exe was not found. $([Environment]::NewLine)$(Get-VisualStudioDependencyGuidance $VsInfo $ComponentIds)"
+    }
+
+    Write-Step "Installing Visual Studio ARM64 C++ dependencies"
+    $arguments = New-Object "System.Collections.Generic.List[string]"
+    $arguments.Add("modify") | Out-Null
+    $arguments.Add("--installPath") | Out-Null
+    $arguments.Add($VsInfo.installationPath) | Out-Null
+    foreach ($componentId in $ComponentIds) {
+        $arguments.Add("--add") | Out-Null
+        $arguments.Add($componentId) | Out-Null
+    }
+    $arguments.Add("--quiet") | Out-Null
+    $arguments.Add("--norestart") | Out-Null
+    $arguments.Add("--wait") | Out-Null
+
+    $exitCode = Invoke-Checked $setup ([string[]]$arguments) @(0, 3010)
+    if ($exitCode -eq 3010) {
+        Write-Warn "Visual Studio Installer requested a restart. If native module rebuild still fails, reboot Windows and rerun this script."
+    }
+}
+
+function Ensure-VisualStudioArm64Tools {
+    if ($SkipVsDependencyCheck) {
+        Write-Warn "Skipping Visual Studio dependency preflight because -SkipVsDependencyCheck was provided."
+        return
+    }
+
+    Write-Step "Checking Visual Studio ARM64 C++ toolchain"
+    $vsInfo = Find-VisualStudioCppInstance
+    if ($null -eq $vsInfo) {
+        throw "Visual Studio C++ toolchain was not found. Install Visual Studio C++ desktop build tools with ARM64 support."
+    }
+
+    $arm64ToolComponents = @(Get-Arm64CppComponentIds $vsInfo.installationPath $vsInfo.toolsetVersion)
+    $toolchainFilesPresent = Test-Arm64CppToolchainFiles $vsInfo.toolsetPath
+    $detectedMissingComponents = @($arm64ToolComponents | Where-Object { -not (Test-VsComponentInstalled $_ $vsInfo.installationPath) })
+    $missingComponents = if ($toolchainFilesPresent) { @() } else { @($detectedMissingComponents) }
+
+    $script:Report.visualStudio = [ordered]@{
+        displayName = $vsInfo.displayName
+        installationPath = $vsInfo.installationPath
+        installationVersion = $vsInfo.installationVersion
+        toolsetVersion = $vsInfo.toolsetVersion
+        requiredComponents = @($arm64ToolComponents)
+        missingComponents = @($missingComponents)
+        arm64ToolchainFilesPresent = $toolchainFilesPresent
+        nodePtySpectreMitigation = "disabled in node-pty gyp before ARM64 rebuild"
+    }
+
+    if ($toolchainFilesPresent) {
+        return
+    }
+
+    if ($InstallVsDependencies) {
+        Install-VisualStudioComponents $vsInfo $arm64ToolComponents
+        $toolchainFilesPresent = Test-Arm64CppToolchainFiles $vsInfo.toolsetPath
+        $detectedMissingComponents = @($arm64ToolComponents | Where-Object { -not (Test-VsComponentInstalled $_ $vsInfo.installationPath) })
+        $missingComponents = if ($toolchainFilesPresent) { @() } else { @($detectedMissingComponents) }
+        $script:Report.visualStudio.missingComponents = @($missingComponents)
+        $script:Report.visualStudio.arm64ToolchainFilesPresent = $toolchainFilesPresent
+        if ($toolchainFilesPresent) {
+            return
+        }
+    }
+
+    throw @"
+Visual Studio ARM64 C++ tools are required before rebuilding native modules.
+
+Install this Visual Studio component:
+  - $($arm64ToolComponents -join "`n  - ")
+
+You can re-run this script with -InstallVsDependencies, or install ARM64 C++ tools from Visual Studio Installer > Modify > Individual components.
+"@
+}
+
+function Disable-NodePtySpectreMitigation {
+    param([string]$NodePtyDir)
+
+    if (-not (Test-Path -LiteralPath $NodePtyDir)) {
+        throw "node-pty directory was not found: $NodePtyDir"
+    }
+
+    $patchedFiles = New-Object "System.Collections.Generic.List[string]"
+    $targets = @(
+        (Join-Path $NodePtyDir "binding.gyp"),
+        (Join-Path $NodePtyDir "deps\winpty\src\winpty.gyp")
+    )
+
+    foreach ($target in $targets) {
+        if (-not (Test-Path -LiteralPath $target)) {
+            continue
+        }
+
+        $before = Get-Content -LiteralPath $target -Raw
+        $after = $before -replace "(?m)^\s*'SpectreMitigation'\s*:\s*'Spectre'\s*,?\r?\n", ""
+        if ($after -ne $before) {
+            Set-TextUtf8NoBom $target $after
+            $patchedFiles.Add((Get-RelativePath $NodePtyDir $target)) | Out-Null
+        }
+    }
+
+    if ($patchedFiles.Count -gt 0) {
+        Add-Replacement "node-pty-spectre-mitigation" "disabled" ($patchedFiles -join ", ")
+    }
+}
+
+function Prune-NodePtyNonArm64Payloads {
+    param([string]$NodePtyDir)
+
+    if (-not (Test-Path -LiteralPath $NodePtyDir)) {
+        throw "node-pty directory was not found: $NodePtyDir"
+    }
+
+    $removed = New-Object "System.Collections.Generic.List[string]"
+
+    $prebuildsRoot = Join-Path $NodePtyDir "prebuilds"
+    if (Test-Path -LiteralPath $prebuildsRoot) {
+        $prebuildDirs = @(Get-ChildItem -LiteralPath $prebuildsRoot -Directory -ErrorAction SilentlyContinue)
+        foreach ($prebuildDir in $prebuildDirs) {
+            if ($prebuildDir.Name -eq "win32-arm64") {
+                continue
+            }
+
+            $removed.Add((Get-RelativePath $NodePtyDir $prebuildDir.FullName)) | Out-Null
+            Remove-Item -LiteralPath $prebuildDir.FullName -Recurse -Force
+        }
+    }
+
+    $conptyRoot = Join-Path $NodePtyDir "third_party\conpty"
+    if (Test-Path -LiteralPath $conptyRoot) {
+        $versionDirs = @(Get-ChildItem -LiteralPath $conptyRoot -Directory -ErrorAction SilentlyContinue)
+        foreach ($versionDir in $versionDirs) {
+            $platformDirs = @(Get-ChildItem -LiteralPath $versionDir.FullName -Directory -ErrorAction SilentlyContinue)
+            foreach ($platformDir in $platformDirs) {
+                if ($platformDir.Name -eq "win10-arm64") {
+                    continue
+                }
+
+                $removed.Add((Get-RelativePath $NodePtyDir $platformDir.FullName)) | Out-Null
+                Remove-Item -LiteralPath $platformDir.FullName -Recurse -Force
+            }
+        }
+    }
+
+    if ($removed.Count -gt 0) {
+        Add-Replacement "node-pty-non-arm64-payloads" "pruned" ($removed -join ", ")
+    }
+}
+
+function Invoke-WithTemporaryEnv {
+    param(
+        [hashtable]$Environment,
+        [scriptblock]$ScriptBlock
+    )
+
+    $old = @{}
+    foreach ($key in $Environment.Keys) {
+        $old[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+        [Environment]::SetEnvironmentVariable($key, [string]$Environment[$key], "Process")
+    }
+
+    try {
+        & $ScriptBlock
+    }
+    finally {
+        foreach ($key in $Environment.Keys) {
+            [Environment]::SetEnvironmentVariable($key, $old[$key], "Process")
+        }
+    }
+}
+
+function Build-Arm64NativeModules {
+    param(
+        [string]$AsarDir,
+        [string]$ElectronVersion,
+        [string]$WorkDir
+    )
+
+    Write-Step "Building ARM64 native Node modules"
+    Require-CommandPath "node" | Out-Null
+    Require-CommandPath "npm" | Out-Null
+    Require-CommandPath "npx" | Out-Null
+
+    $betterSqliteVersion = Get-NpmPackageVersion $AsarDir "better-sqlite3"
+    $nodePtyVersion = Get-NpmPackageVersion $AsarDir "node-pty"
+    $script:Report.versions.betterSqlite3 = $betterSqliteVersion
+    $script:Report.versions.nodePty = $nodePtyVersion
+
+    $buildDir = New-CleanDirectory (Join-Path $WorkDir "native-build")
+    Push-Location $buildDir
+    try {
+        $packageJson = [ordered]@{
+            private = $true
+            dependencies = [ordered]@{
+                "better-sqlite3" = $betterSqliteVersion
+                "node-pty" = $nodePtyVersion
+            }
+            devDependencies = [ordered]@{
+                "electron" = $ElectronVersion
+                "@electron/rebuild" = "latest"
+            }
+        } | ConvertTo-Json -Depth 8
+        Set-TextUtf8NoBom (Join-Path $buildDir "package.json") $packageJson
+
+        Invoke-Checked "npm" @("install", "--ignore-scripts")
+
+        $betterSqliteDir = Join-Path $buildDir "node_modules\better-sqlite3"
+        $nodePtyDir = Join-Path $buildDir "node_modules\node-pty"
+        Disable-NodePtySpectreMitigation $nodePtyDir
+
+        Push-Location $betterSqliteDir
+        try {
+            $prebuildExit = Invoke-Checked "npx" @(
+                "--yes",
+                "prebuild-install",
+                "--runtime", "electron",
+                "--target", $ElectronVersion,
+                "--arch", "arm64",
+                "--platform", "win32"
+            ) @(0, 1)
+            if ($prebuildExit -eq 0) {
+                Add-Replacement "better-sqlite3" "prebuilt-arm64" "electron $ElectronVersion"
+            }
+            else {
+                Add-Replacement "better-sqlite3" "prebuilt-miss" "falling back to @electron/rebuild"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        Invoke-Checked "npx" @(
+            "electron-rebuild",
+            "-v", $ElectronVersion,
+            "--arch", "arm64",
+            "--force",
+            "-w", "better-sqlite3",
+            "-w", "node-pty"
+        )
+
+        Prune-NodePtyNonArm64Payloads $nodePtyDir
+    }
+    finally {
+        Pop-Location
+    }
+
+    foreach ($moduleName in @("better-sqlite3", "node-pty")) {
+        $source = Join-Path $buildDir "node_modules\$moduleName"
+        $destination = Join-Path $AsarDir "node_modules\$moduleName"
+        if (-not (Test-Path -LiteralPath $source)) {
+            throw "Native build did not produce $moduleName"
+        }
+        Remove-IfExists $destination
+        Copy-DirectoryRobust $source $destination
+        Add-Replacement $moduleName "arm64" "rebuilt for Electron $ElectronVersion"
+    }
+}
+
+function Remove-WindowsUpdaterNative {
+    param([string]$ResourcesDir)
+
+    $updaterPath = Join-Path $ResourcesDir "native\windows-updater.node"
+    if (Test-Path -LiteralPath $updaterPath) {
+        Remove-Item -LiteralPath $updaterPath -Force
+        Add-Replacement "windows-updater.node" "removed" "self-signed WoA package disables native updater"
+    }
+}
+
+function Update-AppxManifest {
+    param(
+        [string]$ManifestPath,
+        [string]$IdentityName,
+        [string]$DisplayNameValue,
+        [string]$PublisherValue
+    )
+
+    Write-Step "Rewriting AppxManifest.xml"
+    [xml]$manifest = Get-Content -LiteralPath $ManifestPath -Raw
+    $ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
+    $ns.AddNamespace("f", "http://schemas.microsoft.com/appx/manifest/foundation/windows10")
+    $ns.AddNamespace("uap", "http://schemas.microsoft.com/appx/manifest/uap/windows10")
+    $ns.AddNamespace("mp", "http://schemas.microsoft.com/appx/2014/phone/manifest")
+
+    $identity = $manifest.SelectSingleNode("/f:Package/f:Identity", $ns)
+    if ($null -eq $identity) {
+        throw "Manifest Identity node not found"
+    }
+    $identity.SetAttribute("Name", $IdentityName)
+    $identity.SetAttribute("ProcessorArchitecture", "arm64")
+    $identity.SetAttribute("Publisher", $PublisherValue)
+
+    $properties = $manifest.SelectSingleNode("/f:Package/f:Properties", $ns)
+    if ($null -ne $properties) {
+        $displayNode = $properties.SelectSingleNode("f:DisplayName", $ns)
+        if ($null -ne $displayNode) {
+            $displayNode.InnerText = $DisplayNameValue
+        }
+        $publisherDisplayNode = $properties.SelectSingleNode("f:PublisherDisplayName", $ns)
+        if ($null -ne $publisherDisplayNode) {
+            $publisherDisplayNode.InnerText = $DisplayNameValue
+        }
+    }
+
+    $visualElements = $manifest.SelectSingleNode("/f:Package/f:Applications/f:Application/uap:VisualElements", $ns)
+    if ($null -ne $visualElements) {
+        $visualElements.SetAttribute("DisplayName", $DisplayNameValue)
+        $visualElements.SetAttribute("Description", $DisplayNameValue)
+    }
+
+    $phoneIdentity = $manifest.SelectSingleNode("/f:Package/mp:PhoneIdentity", $ns)
+    if ($null -ne $phoneIdentity) {
+        $phoneIdentity.ParentNode.RemoveChild($phoneIdentity) | Out-Null
+    }
+
+    $settings = New-Object System.Xml.XmlWriterSettings
+    $settings.Indent = $true
+    $settings.Encoding = New-Object System.Text.UTF8Encoding($false)
+    $writer = [System.Xml.XmlWriter]::Create($ManifestPath, $settings)
+    try {
+        $manifest.Save($writer)
+    }
+    finally {
+        $writer.Close()
+    }
+}
+
+function Remove-SourcePackageMetadata {
+    param([string]$PackageRoot)
+
+    foreach ($relative in @(
+        "AppxBlockMap.xml",
+        "AppxSignature.p7x",
+        "AppxMetadata",
+        "microsoft.system.package.metadata"
+    )) {
+        Remove-IfExists (Join-Path $PackageRoot $relative)
+    }
+}
+
+function Ensure-SigningCertificate {
+    param(
+        [string]$Subject,
+        [string]$CertificateDir
+    )
+
+    New-Item -ItemType Directory -Path $CertificateDir -Force | Out-Null
+    $cert = Get-ChildItem Cert:\CurrentUser\My |
+        Where-Object { $_.Subject -eq $Subject -and $_.HasPrivateKey } |
+        Sort-Object NotAfter -Descending |
+        Select-Object -First 1
+
+    if ($null -eq $cert) {
+        Write-Step "Creating self-signed code signing certificate"
+        $cert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject $Subject `
+            -KeyAlgorithm RSA `
+            -KeyLength 2048 `
+            -KeyUsage DigitalSignature `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}false") `
+            -NotAfter (Get-Date).AddYears(5)
+    }
+    else {
+        Write-Step "Reusing existing self-signed certificate $($cert.Thumbprint)"
+    }
+
+    $cerPath = Join-Path $CertificateDir "CodexWoA.cer"
+    Export-Certificate -Cert $cert -FilePath $cerPath -Force | Out-Null
+
+    $script:Report.outputs.certificate = $cerPath
+    $script:Report.outputs.certificateThumbprint = $cert.Thumbprint
+    return $cert
+}
+
+function New-InstallScript {
+    param(
+        [string]$OutputPath,
+        [string]$MsixFileName,
+        [string]$CerRelativePath
+    )
+
+    $content = @'
+#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [string]$MsixPath = (Join-Path $PSScriptRoot "__MSIX_FILE_NAME__"),
+    [string]$CerPath = (Join-Path $PSScriptRoot "__CER_RELATIVE_PATH__")
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+function Assert-MsixSignerMatchesCertificate {
+    param(
+        [string]$Path,
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($null -eq $signature.SignerCertificate) {
+        throw "MSIX does not contain an Authenticode signer: $Path"
+    }
+
+    if ($signature.SignerCertificate.Thumbprint -ne $Certificate.Thumbprint) {
+        throw "MSIX signer thumbprint $($signature.SignerCertificate.Thumbprint) does not match certificate file $($Certificate.Thumbprint)."
+    }
+
+    return $signature
+}
+
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-CurrentPowerShellExecutable {
+    try {
+        $processPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        if (-not [string]::IsNullOrWhiteSpace($processPath) -and (Test-Path -LiteralPath $processPath)) {
+            return $processPath
+        }
+    }
+    catch {
+    }
+
+    $pwsh = Get-Command "pwsh.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $pwsh) {
+        return $pwsh.Source
+    }
+
+    return "powershell.exe"
+}
+
+function Invoke-ElevatedSelf {
+    param(
+        [string]$ResolvedMsixPath,
+        [string]$ResolvedCerPath
+    )
+
+    Write-Host "LocalMachine certificate trust requires administrator rights. Requesting elevation..."
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "`"$PSCommandPath`"",
+        "-MsixPath", "`"$ResolvedMsixPath`"",
+        "-CerPath", "`"$ResolvedCerPath`""
+    )
+    $process = Start-Process -FilePath (Get-CurrentPowerShellExecutable) -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+    exit $process.ExitCode
+}
+
+function Test-CertificateInStore {
+    param(
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [string]$StorePath
+    )
+
+    $trustedPath = Join-Path $StorePath $Certificate.Thumbprint
+    return (Test-Path -LiteralPath $trustedPath)
+}
+
+function Ensure-CertificateInStore {
+    param(
+        [string]$Path,
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [string]$StorePath,
+        [string]$StoreLabel
+    )
+
+    if (Test-CertificateInStore $Certificate $StorePath) {
+        Write-Host "Certificate already trusted in ${StoreLabel}: $($Certificate.Thumbprint)"
+        return
+    }
+
+    Write-Host "Trusting Codex WoA certificate in ${StoreLabel}: $($Certificate.Thumbprint)"
+    Import-Certificate -FilePath $Path -CertStoreLocation $StorePath | Out-Null
+
+    if (-not (Test-CertificateInStore $Certificate $StorePath)) {
+        throw "Certificate import completed, but trust could not be confirmed in ${StoreLabel}: $($Certificate.Thumbprint)"
+    }
+
+    Write-Host "Certificate trust confirmed in $StoreLabel."
+}
+
+$MsixPath = [System.IO.Path]::GetFullPath($MsixPath)
+$CerPath = [System.IO.Path]::GetFullPath($CerPath)
+
+if (-not (Test-Path -LiteralPath $MsixPath)) {
+    throw "MSIX not found: $MsixPath"
+}
+
+if (-not (Test-Path -LiteralPath $CerPath)) {
+    throw "Certificate not found: $CerPath"
+}
+
+$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CerPath)
+
+Write-Host "Checking MSIX signer..."
+$signature = Assert-MsixSignerMatchesCertificate $MsixPath $cert
+
+Write-Host "Checking certificate trust..."
+$machineStorePath = "Cert:\LocalMachine\TrustedPeople"
+$machineStoreLabel = "LocalMachine\TrustedPeople"
+if ((-not (Test-CertificateInStore $cert $machineStorePath)) -and (-not (Test-IsAdministrator))) {
+    Invoke-ElevatedSelf $MsixPath $CerPath
+}
+
+Ensure-CertificateInStore $CerPath $cert $machineStorePath $machineStoreLabel
+
+$signatureAfterTrust = Get-AuthenticodeSignature -LiteralPath $MsixPath
+if ($signatureAfterTrust.Status -ne "Valid") {
+    Write-Warning "MSIX signature status is '$($signatureAfterTrust.Status)' after the certificate trust step. Add-AppxPackage will perform final deployment validation."
+}
+
+Write-Host "Installing $MsixPath..."
+Add-AppxPackage -Path $MsixPath
+Write-Host "Done."
+'@
+
+    $content = $content.
+        Replace("__MSIX_FILE_NAME__", $MsixFileName).
+        Replace("__CER_RELATIVE_PATH__", $CerRelativePath)
+
+    Set-TextUtf8NoBom $OutputPath $content
+}
+
+function New-InstallBatchScript {
+    param([string]$OutputPath)
+
+    $content = @'
+@echo off
+setlocal
+set "SCRIPT_DIR=%~dp0"
+set "POWERSHELL_EXE=pwsh.exe"
+
+where pwsh.exe >nul 2>nul
+if errorlevel 1 set "POWERSHELL_EXE=powershell.exe"
+
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%Install.ps1" %*
+set "EXITCODE=%ERRORLEVEL%"
+
+if not "%EXITCODE%"=="0" (
+    echo.
+    echo Install.ps1 failed with exit code %EXITCODE%.
+    pause
+)
+
+exit /b %EXITCODE%
+'@
+
+    Set-TextUtf8NoBom $OutputPath $content
+}
+
+function Pack-And-SignMsix {
+    param(
+        [string]$PackageRoot,
+        [string]$MsixPath,
+        [string]$MakeAppxPath,
+        [string]$SignToolPath,
+        [object]$Certificate
+    )
+
+    Write-Step "Packing MSIX"
+    Remove-IfExists $MsixPath
+    Invoke-Checked $MakeAppxPath @("pack", "/d", $PackageRoot, "/p", $MsixPath, "/o")
+
+    Write-Step "Signing MSIX"
+    Invoke-Checked $SignToolPath @(
+        "sign",
+        "/fd", "SHA256",
+        "/sha1", $Certificate.Thumbprint,
+        $MsixPath
+    )
+}
+
+function Test-MsixPackage {
+    param(
+        [string]$MsixPath,
+        [string]$VerifyDir,
+        [string]$MakeAppxPath,
+        [string]$SignToolPath,
+        [string]$ExpectedIdentity,
+        [string]$ExpectedSignerThumbprint
+    )
+
+    Write-Step "Verifying generated MSIX"
+    New-CleanDirectory $VerifyDir | Out-Null
+    Invoke-Checked $MakeAppxPath @("unpack", "/p", $MsixPath, "/d", $VerifyDir, "/o")
+
+    [xml]$manifest = Get-Content -LiteralPath (Join-Path $VerifyDir "AppxManifest.xml") -Raw
+    $ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
+    $ns.AddNamespace("f", "http://schemas.microsoft.com/appx/manifest/foundation/windows10")
+    $ns.AddNamespace("uap", "http://schemas.microsoft.com/appx/manifest/uap/windows10")
+    $identity = $manifest.SelectSingleNode("/f:Package/f:Identity", $ns)
+    if ($identity.Name -ne $ExpectedIdentity) {
+        throw "Manifest identity mismatch: $($identity.Name)"
+    }
+    if ($identity.ProcessorArchitecture -ne "arm64") {
+        throw "Manifest architecture mismatch: $($identity.ProcessorArchitecture)"
+    }
+
+    $application = $manifest.SelectSingleNode("/f:Package/f:Applications/f:Application", $ns)
+    if ($application.Executable -ne "app/Codex.exe") {
+        throw "Manifest executable mismatch: $($application.Executable)"
+    }
+
+    $protocol = $manifest.SelectSingleNode("/f:Package/f:Applications/f:Application/f:Extensions/uap:Extension/uap:Protocol", $ns)
+    if ($null -eq $protocol -or $protocol.Name -ne "codex") {
+        throw "Manifest codex protocol was not preserved"
+    }
+
+    $fallbackX64 = New-Object "System.Collections.Generic.HashSet[string]" ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in @(
+        "app\resources\node_repl.exe",
+        "app\resources\plugins\openai-bundled\plugins\latex-tectonic\bin\tectonic.exe",
+        "app\resources\codex.exe",
+        "app\resources\codex-command-runner.exe",
+        "app\resources\codex-windows-sandbox-setup.exe",
+        "app\resources\codex-app-server.exe",
+        "app\resources\codex-responses-api-proxy.exe"
+    )) {
+        $fallbackX64.Add($path) | Out-Null
+    }
+
+    $errors = New-Object System.Collections.Generic.List[string]
+    $fallbacks = New-Object System.Collections.Generic.List[string]
+    $peFiles = Get-ChildItem -LiteralPath (Join-Path $VerifyDir "app") -Recurse -File |
+        Where-Object { $_.Extension.ToLowerInvariant() -in @(".exe", ".dll", ".node") }
+
+    foreach ($file in $peFiles) {
+        $relative = Get-RelativePath $VerifyDir $file.FullName
+        $machine = Get-PeMachine $file.FullName
+        if ($machine -eq "NotPE") {
+            continue
+        }
+
+        $mustBeArm64 = $false
+        if ($relative -match "^app\\resources\\app\.asar\.unpacked\\node_modules\\(better-sqlite3|node-pty)\\") {
+            $mustBeArm64 = $true
+        }
+        elseif ($relative -match "\.node$") {
+            $mustBeArm64 = $true
+        }
+        elseif ($relative -match "^app\\resources\\(node|rg)\.exe$") {
+            $mustBeArm64 = $true
+        }
+        elseif ($relative -match "^app\\resources\\native\\") {
+            $mustBeArm64 = $true
+        }
+        elseif ($relative -notmatch "^app\\resources\\") {
+            $mustBeArm64 = $true
+        }
+
+        if ($mustBeArm64 -and $machine -ne "arm64") {
+            $errors.Add("$relative is $machine, expected arm64")
+            continue
+        }
+
+        if ($machine -eq "x64") {
+            if ($fallbackX64.Contains($relative)) {
+                $fallbacks.Add($relative)
+            }
+            else {
+                $errors.Add("$relative is x64 and is not in the out-of-process fallback allowlist")
+            }
+        }
+    }
+
+    if ($errors.Count -gt 0) {
+        throw "PE architecture validation failed:`n$($errors -join "`n")"
+    }
+
+    $authenticode = Get-AuthenticodeSignature -LiteralPath $MsixPath
+    if ($null -eq $authenticode.SignerCertificate) {
+        throw "MSIX does not contain an Authenticode signer"
+    }
+    if ($authenticode.SignerCertificate.Thumbprint -ne $ExpectedSignerThumbprint) {
+        throw "MSIX signer thumbprint mismatch: $($authenticode.SignerCertificate.Thumbprint)"
+    }
+
+    try {
+        Invoke-Checked $SignToolPath @("verify", "/pa", $MsixPath)
+        $signToolVerify = "passed"
+    }
+    catch {
+        $signToolVerify = "self-signed/untrusted before Install.ps1 trust step: $($_.Exception.Message)"
+        Write-Warn "signtool verify did not build a trusted chain yet. This is expected before Install.ps1 imports the local certificate."
+    }
+
+    try {
+        Add-AppxPackage -Path $MsixPath -WhatIf | Out-Null
+        $whatIf = "passed"
+    }
+    catch {
+        $whatIf = "skipped: $($_.Exception.Message)"
+        Write-Warn "Add-AppxPackage -WhatIf did not complete: $($_.Exception.Message)"
+    }
+
+    $script:Report.validation = [ordered]@{
+        manifestIdentity = $identity.Name
+        manifestArchitecture = $identity.ProcessorArchitecture
+        executable = $application.Executable
+        protocol = $protocol.Name
+        x64Fallbacks = @($fallbacks)
+        signerThumbprint = $authenticode.SignerCertificate.Thumbprint
+        signToolVerify = $signToolVerify
+        addAppxPackageWhatIf = $whatIf
+    }
+}
+
+function Main {
+    if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+        $OutputDir = $script:DefaultOutputDir
+    }
+
+    $resolvedOutputDir = New-Item -ItemType Directory -Path $OutputDir -Force
+    $resolvedOutputDir = (Resolve-Path -LiteralPath $resolvedOutputDir.FullName).Path
+    $workDir = New-CleanDirectory (Join-Path $resolvedOutputDir "work")
+    $cacheDir = New-Item -ItemType Directory -Path (Join-Path $resolvedOutputDir "cache") -Force
+    $cacheDir = (Resolve-Path -LiteralPath $cacheDir.FullName).Path
+
+    $makeAppx = Find-WindowsKitTool "makeappx.exe"
+    $signTool = Find-WindowsKitTool "signtool.exe"
+    $script:Report.tools = [ordered]@{
+        makeAppx = $makeAppx
+        signTool = $signTool
+    }
+
+    Ensure-VisualStudioArm64Tools
+
+    $effectiveSourceMode = Resolve-SourceMode $SourceMode
+    $sourceRoot = Join-Path $workDir "source"
+    if ($effectiveSourceMode -eq "Installed") {
+        Copy-InstalledSource $sourceRoot | Out-Null
+    }
+    else {
+        Copy-StoreInstalledSource $sourceRoot | Out-Null
+    }
+
+    Assert-SourceShape $sourceRoot
+
+    $stageRoot = Join-Path $workDir "stage"
+    Write-Step "Preparing staging package"
+    New-CleanDirectory $stageRoot | Out-Null
+    Copy-DirectoryRobust $sourceRoot $stageRoot
+    Remove-SourcePackageMetadata $stageRoot
+
+    $appDir = Join-Path $stageRoot "app"
+    $resourcesDir = Join-Path $appDir "resources"
+    $asarExtractDir = Join-Path $workDir "app-asar"
+
+    Write-Step "Extracting app.asar"
+    Extract-AppAsar $resourcesDir $asarExtractDir
+
+    $electronVersion = Read-ElectronVersion $appDir $asarExtractDir
+    $nodeVersion = Read-NodeVersion (Join-Path $resourcesDir "node.exe")
+    $script:Report.versions.electron = $electronVersion
+    $script:Report.versions.node = $nodeVersion
+
+    Install-Arm64ElectronRuntime $appDir $electronVersion $cacheDir
+    Install-Arm64Node $resourcesDir $nodeVersion $cacheDir
+    Install-Arm64CodexHelpers $resourcesDir $cacheDir $CodexReleaseTag
+    Install-Arm64Ripgrep $resourcesDir $cacheDir
+    Remove-WindowsUpdaterNative $resourcesDir
+
+    Build-Arm64NativeModules $asarExtractDir $electronVersion $workDir
+
+    Write-Step "Repacking app.asar"
+    Repack-AppAsar $asarExtractDir $resourcesDir
+
+    $manifestPath = Join-Path $stageRoot "AppxManifest.xml"
+    Update-AppxManifest $manifestPath $PackageIdentity $DisplayName $PublisherSubject
+
+    [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
+    $version = $manifest.Package.Identity.Version
+    $script:Report.versions.package = $version
+
+    $certDir = Join-Path $resolvedOutputDir "cert"
+    $certificate = Ensure-SigningCertificate $PublisherSubject $certDir
+
+    $msixFileName = "Codex-WoA_$version`_arm64.msix"
+    $msixPath = Join-Path $resolvedOutputDir $msixFileName
+    if ((Test-Path -LiteralPath $msixPath) -and -not $Force) {
+        throw "Output MSIX already exists: $msixPath. Use -Force to overwrite."
+    }
+
+    Pack-And-SignMsix $stageRoot $msixPath $makeAppx $signTool $certificate
+    Test-MsixPackage $msixPath (Join-Path $workDir "verify") $makeAppx $signTool $PackageIdentity $certificate.Thumbprint
+
+    $installScriptPath = Join-Path $resolvedOutputDir "Install.ps1"
+    New-InstallScript $installScriptPath $msixFileName "cert\CodexWoA.cer"
+    $installBatchPath = Join-Path $resolvedOutputDir "Install.bat"
+    New-InstallBatchScript $installBatchPath
+
+    $script:Report.outputs.msix = $msixPath
+    $script:Report.outputs.installScript = $installScriptPath
+    $script:Report.outputs.installBatch = $installBatchPath
+    $script:Report.finishedAt = (Get-Date).ToString("o")
+
+    $reportPath = Join-Path $resolvedOutputDir "build-report.json"
+    $script:Report.outputs.report = $reportPath
+    $script:Report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+
+    if (-not $KeepWorkDir) {
+        Remove-IfExists $workDir
+    }
+
+    Write-Host ""
+    Write-Host "Codex WoA package created:" -ForegroundColor Green
+    Write-Host "  MSIX: $msixPath"
+    Write-Host "  Certificate: $(Join-Path $certDir 'CodexWoA.cer')"
+    Write-Host "  Installer: $installScriptPath"
+    Write-Host "  Installer batch: $installBatchPath"
+    Write-Host "  Report: $reportPath"
+}
+
+Main

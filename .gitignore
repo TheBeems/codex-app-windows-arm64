@@ -1,0 +1,8 @@
+dist/
+work/
+*.cer
+*.pfx
+*.msix
+*.appx
+*.msixbundle
+*.appxbundle
