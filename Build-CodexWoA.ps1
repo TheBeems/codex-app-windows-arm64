@@ -993,6 +993,74 @@ function Prune-NodePtyNonArm64Payloads {
     }
 }
 
+function Enable-ChromeExtensionHostX64Fallback {
+    param([string]$ResourcesDir)
+
+    $chromePluginDir = Join-Path $ResourcesDir "plugins\openai-bundled\plugins\chrome"
+    if (-not (Test-Path -LiteralPath $chromePluginDir)) {
+        return
+    }
+
+    $arm64Host = Join-Path $chromePluginDir "extension-host\windows\arm64\extension-host.exe"
+    if (Test-Path -LiteralPath $arm64Host) {
+        return
+    }
+
+    $x64Host = Join-Path $chromePluginDir "extension-host\windows\x64\extension-host.exe"
+    if (-not (Test-Path -LiteralPath $x64Host)) {
+        return
+    }
+
+    $installManifest = Join-Path $chromePluginDir "scripts\installManifest.mjs"
+    if (-not (Test-Path -LiteralPath $installManifest)) {
+        throw "Chrome extension host x64 fallback is required, but installManifest.mjs was not found."
+    }
+
+    $before = 'return u.resolve(o,`extension-host/${e}/${t}/${r}`)'
+    $after = 'let s=u.resolve(o,`extension-host/${e}/${t}/${r}`);return e==="windows"&&t==="arm64"&&!w(s)?u.resolve(o,`extension-host/${e}/x64/${r}`):s'
+    $content = Get-Content -LiteralPath $installManifest -Raw
+    if ($content.Contains($after)) {
+        return
+    }
+
+    if (-not $content.Contains($before)) {
+        throw "Could not patch Chrome extension host path resolver for WoA x64 fallback."
+    }
+
+    Set-TextUtf8NoBom $installManifest ($content.Replace($before, $after))
+    Add-Replacement "chrome-extension-host" "x64-fallback" "windows arm64 uses bundled x64 native messaging host"
+}
+
+function Prune-PluginClassicLevelNonArm64WindowsPrebuilds {
+    param([string]$ResourcesDir)
+
+    $pluginsRoot = Join-Path $ResourcesDir "plugins\openai-bundled\plugins"
+    if (-not (Test-Path -LiteralPath $pluginsRoot)) {
+        return
+    }
+
+    $removed = New-Object "System.Collections.Generic.List[string]"
+    $classicLevelDirs = @(Get-ChildItem -LiteralPath $pluginsRoot -Recurse -Directory -Filter "classic-level" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "\\node_modules\\classic-level$" })
+    foreach ($classicLevelDir in $classicLevelDirs) {
+        $prebuildRootPath = Join-Path $classicLevelDir.FullName "prebuilds"
+        if (-not (Test-Path -LiteralPath $prebuildRootPath)) {
+            continue
+        }
+
+        $windowsPrebuilds = @(Get-ChildItem -LiteralPath $prebuildRootPath -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "win32-*" -and $_.Name -ne "win32-arm64" })
+        foreach ($windowsPrebuild in $windowsPrebuilds) {
+            $removed.Add((Get-RelativePath $ResourcesDir $windowsPrebuild.FullName)) | Out-Null
+            Remove-Item -LiteralPath $windowsPrebuild.FullName -Recurse -Force
+        }
+    }
+
+    if ($removed.Count -gt 0) {
+        Add-Replacement "classic-level-non-arm64-windows-prebuilds" "pruned" ($removed -join ", ")
+    }
+}
+
 function Invoke-WithTemporaryEnv {
     param(
         [hashtable]$Environment,
@@ -1461,6 +1529,7 @@ function Test-MsixPackage {
     foreach ($path in @(
         "app\resources\node_repl.exe",
         "app\resources\plugins\openai-bundled\plugins\latex-tectonic\bin\tectonic.exe",
+        "app\resources\plugins\openai-bundled\plugins\chrome\extension-host\windows\x64\extension-host.exe",
         "app\resources\codex.exe",
         "app\resources\codex-command-runner.exe",
         "app\resources\codex-windows-sandbox-setup.exe",
@@ -1610,6 +1679,8 @@ function Main {
     Install-Arm64CodexHelpers $resourcesDir $cacheDir $CodexReleaseTag
     Install-Arm64Ripgrep $resourcesDir $cacheDir
     Remove-WindowsUpdaterNative $resourcesDir
+    Enable-ChromeExtensionHostX64Fallback $resourcesDir
+    Prune-PluginClassicLevelNonArm64WindowsPrebuilds $resourcesDir
 
     Build-Arm64NativeModules $asarExtractDir $electronVersion $workDir
 
