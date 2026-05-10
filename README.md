@@ -21,6 +21,7 @@ OpenAI, Codex, and ChatGPT are trademarks of OpenAI. All other trademarks are th
 - PowerShell 7 (`pwsh`) is recommended. Windows PowerShell is used only as a fallback.
 - Node.js with `node`, `npm`, and `npx` available on `PATH`.
 - Windows SDK tools, including `makeappx.exe` and `signtool.exe`.
+- `tar.exe` available on `PATH` for extracting upstream Linux ARM64 runtime assets.
 - Visual Studio C++ desktop build tools with the ARM64 C++ toolchain.
 - Internet access for downloading Electron, Node.js, Codex helper binaries, ripgrep, and native module build dependencies.
 
@@ -68,6 +69,7 @@ The certificate is generated locally when needed and is not committed to the rep
 - Rebuilds in-process native modules such as `better-sqlite3` and `node-pty` for ARM64.
 - Disables the native Windows updater for the locally signed package.
 - Replaces ARM64 helper executables when upstream ARM64 assets are available.
+- Adds and validates an ARM64 WSL Codex runtime source at `app\resources\codex` and `app\resources\codex-resources\bwrap`.
 - Allows x64 fallback only for separate out-of-process tools where ARM64 replacement is unavailable.
 
 ## Current Support Status

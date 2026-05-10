@@ -32,6 +32,7 @@ else {
     Split-Path -Parent $MyInvocation.MyCommand.Path
 }
 $script:DefaultOutputDir = Join-Path $script:ScriptRoot "dist"
+$script:WslPayloadRelativeDir = "app\resources"
 
 $script:Report = [ordered]@{
     startedAt = (Get-Date).ToString("o")
@@ -204,6 +205,31 @@ function Expand-ZipClean {
     Expand-Archive -LiteralPath $ZipPath -DestinationPath $Destination -Force
 }
 
+function Get-TarCommandPath {
+    $command = Get-Command "tar.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $command -and $command.CommandType -eq "Application") {
+        return $command.Source
+    }
+
+    $command = Get-Command "tar" -ErrorAction SilentlyContinue
+    if ($null -ne $command -and $command.CommandType -eq "Application") {
+        return $command.Source
+    }
+
+    throw "Required command not found: tar.exe"
+}
+
+function Expand-TarGzClean {
+    param(
+        [string]$TarGzPath,
+        [string]$Destination
+    )
+
+    New-CleanDirectory $Destination | Out-Null
+    $tar = Get-TarCommandPath
+    Invoke-Checked $tar @("-xzf", $TarGzPath, "-C", $Destination)
+}
+
 function Get-PeMachine {
     param([string]$Path)
 
@@ -227,6 +253,53 @@ function Get-PeMachine {
             0x8664 { return "x64" }
             0xaa64 { return "arm64" }
             0x01c4 { return "arm" }
+            default { return ("0x{0:X4}" -f $machine) }
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+function Get-ElfMachine {
+    param([string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($null -eq $item -or $item.Length -lt 20) {
+        return "NotELF"
+    }
+
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $reader = New-Object System.IO.BinaryReader($stream)
+        $magic = $reader.ReadBytes(4)
+        if ($magic.Length -ne 4 -or $magic[0] -ne 0x7F -or $magic[1] -ne 0x45 -or $magic[2] -ne 0x4C -or $magic[3] -ne 0x46) {
+            return "NotELF"
+        }
+
+        $class = $reader.ReadByte()
+        if ($class -ne 2) {
+            return "ELF32"
+        }
+
+        $data = $reader.ReadByte()
+        $stream.Seek(18, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $machineBytes = $reader.ReadBytes(2)
+        if ($machineBytes.Length -ne 2) {
+            return "NotELF"
+        }
+
+        if ($data -eq 2) {
+            $machine = ($machineBytes[0] -shl 8) -bor $machineBytes[1]
+        }
+        else {
+            $machine = $machineBytes[0] -bor ($machineBytes[1] -shl 8)
+        }
+
+        switch ($machine) {
+            0x003E { return "x64" }
+            0x00B7 { return "arm64" }
+            0x0028 { return "arm" }
             default { return ("0x{0:X4}" -f $machine) }
         }
     }
@@ -446,7 +519,7 @@ function Repack-AppAsar {
     $unpackedPath = Join-Path $ResourcesDir "app.asar.unpacked"
     Remove-IfExists $asarPath
     Remove-IfExists $unpackedPath
-    Use-Asar @("pack", $ExtractedDir, $asarPath, "--unpack", "{*.node,*.dll,*.exe}")
+    Use-Asar @("pack", $ExtractedDir, $asarPath, "--unpack", "{*.node,*.dll,*.exe,codex,bwrap}")
 }
 
 function Install-Arm64ElectronRuntime {
@@ -588,6 +661,207 @@ function Install-Arm64CodexHelpers {
     }
 }
 
+function Get-ExtractedSingleFile {
+    param(
+        [string]$Root,
+        [string]$ExpectedName
+    )
+
+    $exact = Get-ChildItem -LiteralPath $Root -Recurse -File |
+        Where-Object { $_.Name -eq $ExpectedName } |
+        Select-Object -First 1
+    if ($null -ne $exact) {
+        return $exact.FullName
+    }
+
+    $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File)
+    if ($files.Count -eq 1) {
+        return $files[0].FullName
+    }
+
+    throw "Could not find extracted file $ExpectedName in $Root"
+}
+
+function Get-Arm64WslCodexPayload {
+    param(
+        [object]$Release,
+        [string]$CacheDir
+    )
+
+    $safeTag = $Release.tag_name -replace "[^A-Za-z0-9_.-]", "_"
+    $payloadCacheDir = Join-Path $CacheDir "codex-wsl-aarch64-$safeTag"
+    $codexPath = Join-Path $payloadCacheDir "codex"
+    $bwrapPath = Join-Path $payloadCacheDir "bwrap"
+
+    if (-not (Test-Path -LiteralPath $codexPath) -or -not (Test-Path -LiteralPath $bwrapPath)) {
+        New-CleanDirectory $payloadCacheDir | Out-Null
+
+        $assets = @(
+            @{ asset = "codex-aarch64-unknown-linux-musl.tar.gz"; expected = "codex-aarch64-unknown-linux-musl"; target = $codexPath },
+            @{ asset = "bwrap-aarch64-unknown-linux-musl.tar.gz"; expected = "bwrap-aarch64-unknown-linux-musl"; target = $bwrapPath }
+        )
+
+        foreach ($item in $assets) {
+            $archivePath = Join-Path $CacheDir $item.asset
+            Download-GitHubReleaseAsset $Release $item.asset $archivePath | Out-Null
+
+            $extractDirName = ($item.asset -replace "[^A-Za-z0-9_.-]", "_") -replace "\.tar\.gz$", ""
+            $extractDir = Join-Path $CacheDir $extractDirName
+            Expand-TarGzClean $archivePath $extractDir | Out-Null
+
+            $sourcePath = Get-ExtractedSingleFile $extractDir $item.expected
+            Copy-Item -LiteralPath $sourcePath -Destination $item.target -Force
+        }
+    }
+
+    foreach ($path in @($codexPath, $bwrapPath)) {
+        $machine = Get-ElfMachine $path
+        if ($machine -ne "arm64") {
+            throw "Downloaded WSL runtime payload is $machine, expected arm64: $path"
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        CodexPath = $codexPath
+        BwrapPath = $bwrapPath
+    }
+}
+
+function Copy-Arm64WslCodexPayload {
+    param(
+        [object]$Payload,
+        [string]$DestinationDir
+    )
+
+    New-Item -ItemType Directory -Path $DestinationDir -Force | Out-Null
+    Copy-Item -LiteralPath $Payload.CodexPath -Destination (Join-Path $DestinationDir "codex") -Force
+
+    $resourcesDir = Join-Path $DestinationDir "codex-resources"
+    New-Item -ItemType Directory -Path $resourcesDir -Force | Out-Null
+    Copy-Item -LiteralPath $Payload.BwrapPath -Destination (Join-Path $resourcesDir "bwrap") -Force
+}
+
+function Test-IsUnderDirectory {
+    param(
+        [string]$Path,
+        [string]$Directory
+    )
+
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $directoryFull = [System.IO.Path]::GetFullPath($Directory).TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
+    return $pathFull.StartsWith($directoryFull, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-IsWslCodexPayloadPath {
+    param([string]$RelativePath)
+
+    return (
+        $RelativePath -match "\\bin\\wsl\\codex$" -or
+        $RelativePath -match "\\wsl\\" -or
+        $RelativePath -match "\\codex-wsl"
+    )
+}
+
+function Test-IsWslBwrapPayloadPath {
+    param([string]$RelativePath)
+
+    return (
+        $RelativePath -match "\\codex-resources\\bwrap$" -or
+        $RelativePath -match "\\bin\\wsl\\" -or
+        $RelativePath -match "\\wsl\\"
+    )
+}
+
+function Install-Arm64WslCodexRuntime {
+    param(
+        [string]$PackageRoot,
+        [string]$ResourcesDir,
+        [string]$AsarExtractDir,
+        [string]$CacheDir,
+        [string]$ReleaseTag
+    )
+
+    Write-Step "Replacing WSL Codex runtime with linux-aarch64 from openai/codex"
+    $release = Get-GitHubRelease "openai" "codex" $ReleaseTag
+    $script:Report.versions.codexRelease = $release.tag_name
+    $payload = Get-Arm64WslCodexPayload $release $CacheDir
+
+    $packagedSeedDir = Join-Path $PackageRoot $script:WslPayloadRelativeDir
+    Copy-Arm64WslCodexPayload $payload $packagedSeedDir
+    Add-Replacement "wsl-codex-packaged-source" "arm64" (Get-RelativePath $PackageRoot (Join-Path $packagedSeedDir "codex"))
+    Add-Replacement "wsl-bwrap-packaged-source" "arm64" (Get-RelativePath $PackageRoot (Join-Path $packagedSeedDir "codex-resources\bwrap"))
+
+    $candidateRoots = @($ResourcesDir, $AsarExtractDir) | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_)
+    }
+
+    $patchedCodexSeeds = New-Object System.Collections.Generic.List[string]
+    $patchedBwrapSeeds = New-Object System.Collections.Generic.List[string]
+    foreach ($root in $candidateRoots) {
+        $files = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq "codex" -or $_.Name -eq "bwrap" }
+
+        foreach ($file in $files) {
+            if (Test-IsUnderDirectory $file.FullName $packagedSeedDir) {
+                continue
+            }
+
+            $machine = Get-ElfMachine $file.FullName
+            if ($machine -eq "NotELF") {
+                continue
+            }
+
+            $relative = if (Test-IsUnderDirectory $file.FullName $PackageRoot) {
+                Get-RelativePath $PackageRoot $file.FullName
+            }
+            else {
+                "app.asar\" + (Get-RelativePath $AsarExtractDir $file.FullName)
+            }
+
+            if ($file.Name -eq "codex") {
+                if (-not (Test-IsWslCodexPayloadPath $relative)) {
+                    continue
+                }
+
+                Copy-Item -LiteralPath $payload.CodexPath -Destination $file.FullName -Force
+                $seedDir = Split-Path -Parent $file.FullName
+                $seedResourcesDir = Join-Path $seedDir "codex-resources"
+                New-Item -ItemType Directory -Path $seedResourcesDir -Force | Out-Null
+                $bwrapTarget = Join-Path $seedResourcesDir "bwrap"
+                Copy-Item -LiteralPath $payload.BwrapPath -Destination $bwrapTarget -Force
+                $bwrapRelative = if (Test-IsUnderDirectory $bwrapTarget $PackageRoot) {
+                    Get-RelativePath $PackageRoot $bwrapTarget
+                }
+                else {
+                    "app.asar\" + (Get-RelativePath $AsarExtractDir $bwrapTarget)
+                }
+                $patchedCodexSeeds.Add($relative) | Out-Null
+                $patchedBwrapSeeds.Add($bwrapRelative) | Out-Null
+            }
+            elseif ($file.Name -eq "bwrap") {
+                if (-not (Test-IsWslBwrapPayloadPath $relative)) {
+                    continue
+                }
+
+                Copy-Item -LiteralPath $payload.BwrapPath -Destination $file.FullName -Force
+                $patchedBwrapSeeds.Add($relative) | Out-Null
+            }
+        }
+    }
+
+    if ($patchedCodexSeeds.Count -gt 0) {
+        Add-Replacement "wsl-codex-existing-seeds" "arm64" ($patchedCodexSeeds -join ", ")
+    }
+    else {
+        Write-Warn "No extra packaged WSL codex seed was found. The ARM64 source was added at app\resources\codex."
+        Add-Replacement "wsl-codex-existing-seeds" "not-found" "packaged source added at app\resources\codex"
+    }
+
+    if ($patchedBwrapSeeds.Count -gt 0) {
+        Add-Replacement "wsl-bwrap-existing-seeds" "arm64" ($patchedBwrapSeeds -join ", ")
+    }
+}
+
 function Install-Arm64Ripgrep {
     param(
         [string]$ResourcesDir,
@@ -654,7 +928,7 @@ function Get-VisualStudioInstances {
         return @()
     }
 
-    $json = & $vswhere -all -format json
+    $json = & $vswhere -all -products * -format json
     if ([string]::IsNullOrWhiteSpace(($json -join ""))) {
         return @()
     }
@@ -699,7 +973,7 @@ function Test-VsComponentInstalled {
         return $false
     }
 
-    $output = & $vswhere -all -requires $ComponentId -property installationPath
+    $output = & $vswhere -all -products * -requires $ComponentId -property installationPath
     return @($output) -contains $InstallationPath
 }
 
@@ -1604,8 +1878,53 @@ function Test-MsixPackage {
         }
     }
 
+    $wslElfPayloads = New-Object System.Collections.Generic.List[string]
+    $requiredWslPayloads = @(
+        (Join-Path $script:WslPayloadRelativeDir "codex"),
+        (Join-Path $script:WslPayloadRelativeDir "codex-resources\bwrap")
+    )
+    foreach ($relative in $requiredWslPayloads) {
+        $payloadPath = Join-Path $VerifyDir $relative
+        if (-not (Test-Path -LiteralPath $payloadPath)) {
+            $errors.Add("$relative is missing")
+            continue
+        }
+
+        $machine = Get-ElfMachine $payloadPath
+        if ($machine -ne "arm64") {
+            $errors.Add("$relative is $machine, expected arm64")
+        }
+        elseif (-not $wslElfPayloads.Contains($relative)) {
+            $wslElfPayloads.Add($relative) | Out-Null
+        }
+    }
+
+    $elfFiles = Get-ChildItem -LiteralPath (Join-Path $VerifyDir "app") -Recurse -File
+    foreach ($file in $elfFiles) {
+        $machine = Get-ElfMachine $file.FullName
+        if ($machine -eq "NotELF") {
+            continue
+        }
+
+        $relative = Get-RelativePath $VerifyDir $file.FullName
+        $isCodexWslPayload = $file.Name -eq "codex" -and (Test-IsWslCodexPayloadPath $relative)
+        $isBwrapWslPayload = $file.Name -eq "bwrap" -and (Test-IsWslBwrapPayloadPath $relative)
+
+        if ($isCodexWslPayload -or $isBwrapWslPayload) {
+            if ($machine -ne "arm64") {
+                $errors.Add("$relative is Linux $machine ELF, expected arm64")
+            }
+            elseif (-not $wslElfPayloads.Contains($relative)) {
+                $wslElfPayloads.Add($relative) | Out-Null
+            }
+        }
+        elseif ($machine -eq "x64" -and ($file.Name -eq "codex" -or $file.Name -eq "bwrap")) {
+            $errors.Add("$relative is Linux x64 ELF and looks like an unpatched WSL runtime payload")
+        }
+    }
+
     if ($errors.Count -gt 0) {
-        throw "PE architecture validation failed:`n$($errors -join "`n")"
+        throw "Architecture validation failed:`n$($errors -join "`n")"
     }
 
     $authenticode = Get-AuthenticodeSignature -LiteralPath $MsixPath
@@ -1640,6 +1959,7 @@ function Test-MsixPackage {
         executable = $application.Executable
         protocol = $protocol.Name
         x64Fallbacks = @($fallbacks)
+        wslElfPayloads = @($wslElfPayloads)
         signerThumbprint = $authenticode.SignerCertificate.Thumbprint
         signToolVerify = $signToolVerify
         addAppxPackageWhatIf = $whatIf
@@ -1698,6 +2018,7 @@ function Main {
     Install-Arm64ElectronRuntime $appDir $electronVersion $cacheDir
     Install-Arm64Node $resourcesDir $nodeVersion $cacheDir
     Install-Arm64CodexHelpers $resourcesDir $cacheDir $CodexReleaseTag
+    Install-Arm64WslCodexRuntime $stageRoot $resourcesDir $asarExtractDir $cacheDir $CodexReleaseTag
     Install-Arm64Ripgrep $resourcesDir $cacheDir
     Remove-WindowsUpdaterNative $resourcesDir
     Enable-ChromeExtensionHostX64Fallback $resourcesDir
