@@ -1298,12 +1298,33 @@ function New-InstallScript {
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [string]$MsixPath = (Join-Path $PSScriptRoot "__MSIX_FILE_NAME__"),
-    [string]$CerPath = (Join-Path $PSScriptRoot "__CER_RELATIVE_PATH__")
+    [string]$MsixPath = "",
+    [string]$CerPath = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$script:ScriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $PSScriptRoot
+}
+elseif (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+    Split-Path -Parent $PSCommandPath
+}
+elseif ($MyInvocation.MyCommand.Path) {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+else {
+    Get-Location
+}
+
+if ([string]::IsNullOrWhiteSpace($MsixPath)) {
+    $MsixPath = Join-Path $script:ScriptRoot "__MSIX_FILE_NAME__"
+}
+
+if ([string]::IsNullOrWhiteSpace($CerPath)) {
+    $CerPath = Join-Path $script:ScriptRoot "__CER_RELATIVE_PATH__"
+}
 
 function Assert-MsixSignerMatchesCertificate {
     param(
