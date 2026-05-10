@@ -702,11 +702,11 @@ function Get-Arm64WslCodexPayload {
         )
 
         foreach ($item in $assets) {
-            $archivePath = Join-Path $CacheDir $item.asset
+            $archivePath = Join-Path $payloadCacheDir $item.asset
             Download-GitHubReleaseAsset $Release $item.asset $archivePath | Out-Null
 
             $extractDirName = ($item.asset -replace "[^A-Za-z0-9_.-]", "_") -replace "\.tar\.gz$", ""
-            $extractDir = Join-Path $CacheDir $extractDirName
+            $extractDir = Join-Path $payloadCacheDir $extractDirName
             Expand-TarGzClean $archivePath $extractDir | Out-Null
 
             $sourcePath = Get-ExtractedSingleFile $extractDir $item.expected
