@@ -21,6 +21,7 @@ OpenAI, Codex 및 ChatGPT는 OpenAI의 상표입니다. 그 외 모든 상표는
 - PowerShell 7(`pwsh`) 권장. Windows PowerShell은 fallback으로만 사용됩니다.
 - `PATH`에서 사용할 수 있는 Node.js, `node`, `npm`, `npx`.
 - `makeappx.exe`, `signtool.exe`를 포함한 Windows SDK 도구.
+- upstream Linux ARM64 runtime asset 압축 해제를 위해 `PATH`에서 사용할 수 있는 `tar.exe`.
 - ARM64 C++ toolchain이 포함된 Visual Studio C++ desktop build tools.
 - Electron, Node.js, Codex helper 바이너리, ripgrep, 네이티브 모듈 빌드 의존성 다운로드를 위한 인터넷 연결.
 
@@ -68,6 +69,7 @@ Build-CodexWoA.bat -SourceMode Installed -Force
 - `better-sqlite3`, `node-pty` 같은 in-process 네이티브 모듈을 ARM64로 rebuild합니다.
 - 로컬 자체 서명 패키지에서는 native Windows updater를 비활성화합니다.
 - upstream ARM64 asset이 있는 helper 실행 파일을 ARM64 버전으로 교체합니다.
+- `app\resources\codex` 및 `app\resources\codex-resources\bwrap`에 ARM64 WSL Codex runtime source를 추가하고 검증합니다.
 - ARM64 대체가 불가능한 별도 out-of-process 도구에만 x64 fallback을 허용합니다.
 
 ## 현재 지원 상태
