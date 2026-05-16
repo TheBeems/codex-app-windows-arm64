@@ -908,6 +908,87 @@ function Get-NpmPackageVersion {
     return [string]$package.version
 }
 
+function Patch-BetterSqlite3ForElectron42 {
+    param(
+        [string]$PackageDir,
+        [string]$ElectronVersion
+    )
+
+    $electronMajor = [int]($ElectronVersion.Split(".")[0])
+    if ($electronMajor -lt 42) {
+        return
+    }
+
+    $sourceDir = Join-Path $PackageDir "src"
+    if (-not (Test-Path -LiteralPath $sourceDir)) {
+        throw "better-sqlite3 source directory was not found: $sourceDir"
+    }
+
+    $mainSource = Join-Path $sourceDir "better_sqlite3.cpp"
+    $macrosSource = Join-Path $sourceDir "util\macros.cpp"
+    $helpersSource = Join-Path $sourceDir "util\helpers.cpp"
+
+    $main = Get-Content -LiteralPath $mainSource -Raw
+    $macros = Get-Content -LiteralPath $macrosSource -Raw
+    $helpers = Get-Content -LiteralPath $helpersSource -Raw
+
+    $needsFrameAddressShim = $main -notmatch "__builtin_frame_address"
+    $needsExternalNewPatch = $main.Contains("v8::Local<v8::External> data = v8::External::New(isolate, addon);")
+    $needsExternalValuePatch = $macros.Contains("static_cast<Addon*>(info.Data().As<v8::External>()->Value())")
+    $needsNativeDataPropertyPatch = $helpers -match "func,\r?\n\s*0,\r?\n\s*data"
+
+    if (-not ($needsFrameAddressShim -or $needsExternalNewPatch -or $needsExternalValuePatch -or $needsNativeDataPropertyPatch)) {
+        return
+    }
+
+    if ($needsFrameAddressShim) {
+        $main = $main -replace "#include <climits>", @"
+#if defined(_MSC_VER) && !defined(__clang__) && !defined(__builtin_frame_address)
+#include <intrin.h>
+#define __builtin_frame_address(level) _AddressOfReturnAddress()
+#endif
+
+#include <climits>
+"@
+    }
+    if ($needsExternalNewPatch) {
+        $main = $main.Replace(
+            "v8::Local<v8::External> data = v8::External::New(isolate, addon);",
+            "v8::Local<v8::External> data = V8_EXTERNAL_NEW(isolate, addon);")
+    }
+    Set-TextUtf8NoBom $mainSource $main
+
+    if (($needsExternalNewPatch -or $needsExternalValuePatch) -and $macros -notmatch "V8_EXTERNAL_POINTER_TAG") {
+        $macros = $macros.Replace(
+            "#define EasyIsolate v8::Isolate* isolate = v8::Isolate::GetCurrent()",
+            @"
+#if defined(V8_MAJOR_VERSION) && V8_MAJOR_VERSION >= 14
+#define V8_EXTERNAL_POINTER_TAG v8::kExternalPointerTypeTagDefault
+#define V8_EXTERNAL_NEW(isolate, value) v8::External::New((isolate), (value), V8_EXTERNAL_POINTER_TAG)
+#define V8_EXTERNAL_VALUE(external) (external)->Value(V8_EXTERNAL_POINTER_TAG)
+#else
+#define V8_EXTERNAL_NEW(isolate, value) v8::External::New((isolate), (value))
+#define V8_EXTERNAL_VALUE(external) (external)->Value()
+#endif
+
+#define EasyIsolate v8::Isolate* isolate = v8::Isolate::GetCurrent()
+"@)
+    }
+    if ($needsExternalValuePatch) {
+        $macros = $macros.Replace(
+            "static_cast<Addon*>(info.Data().As<v8::External>()->Value())",
+            "static_cast<Addon*>(V8_EXTERNAL_VALUE(info.Data().As<v8::External>()))")
+    }
+    Set-TextUtf8NoBom $macrosSource $macros
+
+    if ($needsNativeDataPropertyPatch) {
+        $helpers = $helpers -replace "(func,\r?\n\s*)0(,\r?\n\s*data)", '${1}nullptr${2}'
+        Set-TextUtf8NoBom $helpersSource $helpers
+    }
+
+    Add-Replacement "better-sqlite3-source" "patched" "Electron 42 V8 API compatibility"
+}
+
 function Get-VsWherePath {
     $candidate = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path -LiteralPath $candidate) {
@@ -1394,6 +1475,7 @@ function Build-Arm64NativeModules {
 
         $betterSqliteDir = Join-Path $buildDir "node_modules\better-sqlite3"
         $nodePtyDir = Join-Path $buildDir "node_modules\node-pty"
+        Patch-BetterSqlite3ForElectron42 $betterSqliteDir $ElectronVersion
         Disable-NodePtySpectreMitigation $nodePtyDir
 
         Push-Location $betterSqliteDir
