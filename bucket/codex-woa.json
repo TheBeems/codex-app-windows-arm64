@@ -6,11 +6,18 @@
   "architecture": {
     "arm64": {
       "url": "https://github.com/eliasblume/codex-app-windows-arm64/releases/download/26.513.4821/dist.7z",
-      "hash": "f09d9b6916ff73906a8c7f9272a009d648353155b78adb16a194d761e38aebdd"
+      "hash": "7832742b8a34425d5f8c9b0e3df7b32c3c6a60b02dfb28a756ea81e2f7f430be"
     }
   },
   "installer": {
-    "script": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"$dir\\Install.ps1\""
+    "script": [
+      "$msix = Get-ChildItem -LiteralPath $dir -Filter \"Codex-WoA_*_arm64.msix\" | Select-Object -First 1",
+      "$cer = Join-Path $dir \"CodexWoA.cer\"",
+      "if (-not $msix) { throw \"Codex WoA MSIX not found.\" }",
+      "if (-not (Test-Path -LiteralPath $cer)) { $cer = Join-Path $dir \"cert\\CodexWoA.cer\" }",
+      "& (Join-Path $dir \"Install.ps1\") -MsixPath $msix.FullName -CerPath $cer",
+      "if ($LASTEXITCODE) { exit $LASTEXITCODE }"
+    ]
   },
   "uninstaller": {
     "script": "Get-AppxPackage -Name \"OpenAI.Codex.WoA\" | Remove-AppxPackage"
