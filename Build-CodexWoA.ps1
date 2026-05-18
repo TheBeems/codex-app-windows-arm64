@@ -1527,6 +1527,13 @@ function Build-Arm64NativeModules {
             }
         } | ConvertTo-Json -Depth 8
         Set-TextUtf8NoBom (Join-Path $buildDir "package.json") $packageJson
+        Set-TextUtf8NoBom (Join-Path $buildDir "pnpm-workspace.yaml") @"
+packages:
+  - .
+allowBuilds:
+  better-sqlite3: true
+  node-pty: true
+"@
 
         Invoke-Checked "pnpm" @("install", "--ignore-scripts", "--config.node-linker=hoisted")
 
