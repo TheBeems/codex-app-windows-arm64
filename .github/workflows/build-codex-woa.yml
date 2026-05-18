@@ -92,7 +92,12 @@ jobs:
         shell: pwsh
         run: |
           Push-Location .\dist
-          7z a ..\dist.7z *
+          7z a ..\dist.7z `
+            .\Codex-WoA_*_arm64.msix `
+            .\cert\CodexWoA.cer `
+            .\Install.ps1 `
+            .\Install.bat `
+            .\build-report.json
           Pop-Location
 
       - name: Generate Scoop Manifest
@@ -148,6 +153,11 @@ jobs:
           Source package: official Microsoft Store OpenAI.Codex x64 MSIX.
           This package is locally signed by the workflow-generated Codex WoA certificate included in the archive.
           "@
+
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
+          }
 
           gh release create $env:RELEASE_TAG dist.7z codex-woa.json --title $env:RELEASE_TAG --notes $notes
 
