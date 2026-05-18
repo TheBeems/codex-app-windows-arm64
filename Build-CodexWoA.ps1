@@ -580,6 +580,92 @@ function Repack-AppAsar {
     Use-Asar @("pack", $ExtractedDir, $asarPath, "--unpack", "{*.node,*.dll,*.exe,codex,bwrap}")
 }
 
+function Read-PngUInt32BigEndian {
+    param(
+        [byte[]]$Bytes,
+        [int]$Offset
+    )
+
+    return (($Bytes[$Offset] -shl 24) -bor ($Bytes[$Offset + 1] -shl 16) -bor ($Bytes[$Offset + 2] -shl 8) -bor $Bytes[$Offset + 3])
+}
+
+function New-IcoFromPng {
+    param(
+        [string]$PngPath,
+        [string]$IcoPath
+    )
+
+    $png = [System.IO.File]::ReadAllBytes($PngPath)
+    if ($png.Length -lt 24 -or $png[0] -ne 0x89 -or $png[1] -ne 0x50 -or $png[2] -ne 0x4E -or $png[3] -ne 0x47) {
+        throw "Icon source is not a PNG file: $PngPath"
+    }
+
+    $width = Read-PngUInt32BigEndian $png 16
+    $height = Read-PngUInt32BigEndian $png 20
+    $iconWidth = if ($width -ge 256) { 0 } else { [byte]$width }
+    $iconHeight = if ($height -ge 256) { 0 } else { [byte]$height }
+
+    New-Item -ItemType Directory -Path (Split-Path -Parent $IcoPath) -Force | Out-Null
+    $stream = [System.IO.File]::Create($IcoPath)
+    try {
+        $writer = New-Object System.IO.BinaryWriter($stream)
+        $writer.Write([uint16]0)
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]1)
+        $writer.Write([byte]$iconWidth)
+        $writer.Write([byte]$iconHeight)
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]32)
+        $writer.Write([uint32]$png.Length)
+        $writer.Write([uint32]22)
+        $writer.Write($png)
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+function Get-RceditPath {
+    param([string]$CacheDir)
+
+    $rceditVersion = "v2.0.0"
+    $rceditName = "rcedit-x64.exe"
+    $rceditPath = Join-Path $CacheDir $rceditName
+    $expectedHash = "3E7801DB1A5EDBEC91B49A24A094AAD776CB4515488EA5A4CA2289C400EADE2A"
+    if (-not (Test-Path -LiteralPath $rceditPath)) {
+        Download-File "https://github.com/electron/rcedit/releases/download/$rceditVersion/$rceditName" $rceditPath
+    }
+
+    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $rceditPath).Hash
+    if ($actualHash -ne $expectedHash) {
+        throw "rcedit SHA256 mismatch: $actualHash"
+    }
+
+    return $rceditPath
+}
+
+function Set-CodexExecutableIcon {
+    param(
+        [string]$PackageRoot,
+        [string]$CodexExe,
+        [string]$CacheDir
+    )
+
+    $iconPng = Join-Path $PackageRoot "assets\icon.png"
+    if (-not (Test-Path -LiteralPath $iconPng)) {
+        Write-Warn "Could not patch Codex.exe icon because assets\icon.png was not found."
+        return
+    }
+
+    $iconIco = Join-Path $CacheDir "CodexWoA.ico"
+    New-IcoFromPng $iconPng $iconIco
+    $rcedit = Get-RceditPath $CacheDir
+    Invoke-Checked $rcedit @($CodexExe, "--set-icon", $iconIco)
+    Add-Replacement "Codex.exe-icon" "patched" "assets\icon.png"
+}
+
 function Install-Arm64ElectronRuntime {
     param(
         [string]$AppDir,
@@ -614,6 +700,7 @@ function Install-Arm64ElectronRuntime {
         throw "Electron runtime did not contain electron.exe"
     }
     Move-Item -LiteralPath $electronExe -Destination $codexExe -Force
+    Set-CodexExecutableIcon (Split-Path -Parent $AppDir) $codexExe $CacheDir
 
     Add-Replacement "electron-runtime" "arm64" $zipName
 }
