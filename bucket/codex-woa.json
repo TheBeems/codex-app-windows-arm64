@@ -6,7 +6,7 @@
   "architecture": {
     "arm64": {
       "url": "https://github.com/eliasblume/codex-app-windows-arm64/releases/download/26.513.4821/dist.7z",
-      "hash": "9f613ab0b14a351cc9c7e4fd86a658e09319d76807d9176df93e33ab127d955a"
+      "hash": "f09d9b6916ff73906a8c7f9272a009d648353155b78adb16a194d761e38aebdd"
     }
   },
   "installer": {
