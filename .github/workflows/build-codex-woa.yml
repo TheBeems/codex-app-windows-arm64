@@ -9,9 +9,10 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "17 * * * *"
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -26,10 +27,51 @@ jobs:
       msix_file: ${{ steps.store.outputs.msix_file }}
       msix_sha1: ${{ steps.store.outputs.msix_sha1 }}
     steps:
+      - id: previous_run
+        name: Stop Scheduled Runs After Failure
+        if: github.event_name == 'schedule'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $runs = gh run list `
+            --repo $env:GITHUB_REPOSITORY `
+            --workflow $env:GITHUB_WORKFLOW `
+            --status completed `
+            --limit 100 `
+            --json conclusion,databaseId,url `
+            | ConvertFrom-Json
+
+          foreach ($run in $runs) {
+            $jobs = gh run view $run.databaseId `
+              --repo $env:GITHUB_REPOSITORY `
+              --json jobs `
+              | ConvertFrom-Json
+
+            $buildJob = $jobs.jobs | Where-Object { $_.name -eq "Build And Release" } | Select-Object -First 1
+            if (-not $buildJob -or $buildJob.conclusion -eq "skipped") {
+              continue
+            }
+
+            if ($buildJob.conclusion -eq "failure") {
+              "continue=false" >> $env:GITHUB_OUTPUT
+              "Latest completed build job failed: $($run.url)" >> $env:GITHUB_STEP_SUMMARY
+              exit 0
+            }
+
+            break
+          }
+
+          "continue=true" >> $env:GITHUB_OUTPUT
+
       - uses: actions/checkout@v6
+        if: steps.previous_run.outputs.continue != 'false'
 
       - id: store
         name: Resolve Latest Store MSIX
+        if: steps.previous_run.outputs.continue != 'false'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
