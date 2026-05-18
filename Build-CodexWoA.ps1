@@ -1906,12 +1906,7 @@ function Test-MsixPackage {
     foreach ($path in @(
         "app\resources\node_repl.exe",
         "app\resources\plugins\openai-bundled\plugins\latex\bin\tectonic.exe",
-        "app\resources\plugins\openai-bundled\plugins\chrome\extension-host\windows\x64\extension-host.exe",
-        "app\resources\codex.exe",
-        "app\resources\codex-command-runner.exe",
-        "app\resources\codex-windows-sandbox-setup.exe",
-        "app\resources\codex-app-server.exe",
-        "app\resources\codex-responses-api-proxy.exe"
+        "app\resources\plugins\openai-bundled\plugins\chrome\extension-host\windows\x64\extension-host.exe"
     )) {
         $fallbackX64.Add($path) | Out-Null
     }
