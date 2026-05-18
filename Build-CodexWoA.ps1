@@ -1,8 +1,10 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet("Prompt", "Installed", "StoreLatest")]
+    [ValidateSet("Prompt", "Installed", "StoreLatest", "Msix")]
     [string]$SourceMode = "Prompt",
+
+    [string]$SourceMsixPath = "",
 
     [string]$OutputDir = "",
 
@@ -205,6 +207,17 @@ function Expand-ZipClean {
     Expand-Archive -LiteralPath $ZipPath -DestinationPath $Destination -Force
 }
 
+function Expand-MsixClean {
+    param(
+        [string]$MsixPath,
+        [string]$Destination
+    )
+
+    New-CleanDirectory $Destination | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($MsixPath, $Destination)
+}
+
 function Get-TarCommandPath {
     $command = Get-Command "tar.exe" -ErrorAction SilentlyContinue
     if ($null -ne $command -and $command.CommandType -eq "Application") {
@@ -356,9 +369,11 @@ function Resolve-SourceMode {
     Write-Host "Select Codex x64 source package:"
     Write-Host "  1. Installed Microsoft Store package"
     Write-Host "  2. Open Microsoft Store, then use installed package"
-    $choice = Read-Host "Choice [1/2]"
+    Write-Host "  3. Local Microsoft Store MSIX file"
+    $choice = Read-Host "Choice [1/2/3]"
     switch ($choice) {
         "2" { return "StoreLatest" }
+        "3" { return "Msix" }
         default { return "Installed" }
     }
 }
@@ -426,6 +441,48 @@ function Copy-StoreInstalledSource {
     return $copied
 }
 
+function Copy-MsixSource {
+    param(
+        [string]$MsixPath,
+        [string]$Destination
+    )
+
+    if ([string]::IsNullOrWhiteSpace($MsixPath)) {
+        $MsixPath = Read-Host "Path to OpenAI.Codex x64 MSIX"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($MsixPath)) {
+        throw "-SourceMsixPath is required when -SourceMode Msix is used."
+    }
+
+    $resolvedMsixPath = (Resolve-Path -LiteralPath $MsixPath).Path
+    Write-Step "Extracting source MSIX $resolvedMsixPath"
+    Expand-MsixClean $resolvedMsixPath $Destination
+
+    $manifestPath = Join-Path $Destination "AppxManifest.xml"
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        throw "MSIX did not contain AppxManifest.xml: $resolvedMsixPath"
+    }
+
+    [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
+    $identity = $manifest.Package.Identity
+    if ($identity.Name -ne "OpenAI.Codex") {
+        throw "MSIX identity mismatch: $($identity.Name). Expected OpenAI.Codex."
+    }
+    if ($identity.ProcessorArchitecture -ne "x64") {
+        throw "MSIX architecture mismatch: $($identity.ProcessorArchitecture). Expected x64."
+    }
+
+    $script:Report.source = [ordered]@{
+        kind = "Msix"
+        path = $resolvedMsixPath
+        packageFullName = "OpenAI.Codex_$($identity.Version)_x64__2p2nqsd0c76g0"
+        version = [string]$identity.Version
+    }
+
+    return $Destination
+}
+
 function Assert-SourceShape {
     param([string]$PackageRoot)
 
@@ -490,7 +547,8 @@ function Use-Asar {
         [string[]]$Arguments
     )
 
-    Invoke-Checked "npx" (@("--yes", "@electron/asar") + $Arguments)
+    Require-CommandPath "pnpm" | Out-Null
+    Invoke-Checked "pnpm" (@("dlx", "@electron/asar") + $Arguments)
 }
 
 function Extract-AppAsar {
@@ -1447,8 +1505,7 @@ function Build-Arm64NativeModules {
 
     Write-Step "Building ARM64 native Node modules"
     Require-CommandPath "node" | Out-Null
-    Require-CommandPath "npm" | Out-Null
-    Require-CommandPath "npx" | Out-Null
+    Require-CommandPath "pnpm" | Out-Null
 
     $betterSqliteVersion = Get-NpmPackageVersion $AsarDir "better-sqlite3"
     $nodePtyVersion = Get-NpmPackageVersion $AsarDir "node-pty"
@@ -1471,7 +1528,7 @@ function Build-Arm64NativeModules {
         } | ConvertTo-Json -Depth 8
         Set-TextUtf8NoBom (Join-Path $buildDir "package.json") $packageJson
 
-        Invoke-Checked "npm" @("install", "--ignore-scripts")
+        Invoke-Checked "pnpm" @("install", "--ignore-scripts", "--config.node-linker=hoisted")
 
         $betterSqliteDir = Join-Path $buildDir "node_modules\better-sqlite3"
         $nodePtyDir = Join-Path $buildDir "node_modules\node-pty"
@@ -1480,8 +1537,8 @@ function Build-Arm64NativeModules {
 
         Push-Location $betterSqliteDir
         try {
-            $prebuildExit = Invoke-Checked "npx" @(
-                "--yes",
+            $prebuildExit = Invoke-Checked "pnpm" @(
+                "dlx",
                 "prebuild-install",
                 "--runtime", "electron",
                 "--target", $ElectronVersion,
@@ -1499,7 +1556,8 @@ function Build-Arm64NativeModules {
             Pop-Location
         }
 
-        Invoke-Checked "npx" @(
+        Invoke-Checked "pnpm" @(
+            "exec",
             "electron-rebuild",
             "-v", $ElectronVersion,
             "--arch", "arm64",
@@ -2065,11 +2123,11 @@ function Main {
 
     $effectiveSourceMode = Resolve-SourceMode $SourceMode
     $sourceRoot = Join-Path $workDir "source"
-    if ($effectiveSourceMode -eq "Installed") {
-        Copy-InstalledSource $sourceRoot | Out-Null
-    }
-    else {
-        Copy-StoreInstalledSource $sourceRoot | Out-Null
+    switch ($effectiveSourceMode) {
+        "Installed" { Copy-InstalledSource $sourceRoot | Out-Null }
+        "StoreLatest" { Copy-StoreInstalledSource $sourceRoot | Out-Null }
+        "Msix" { Copy-MsixSource $SourceMsixPath $sourceRoot | Out-Null }
+        default { throw "Unsupported source mode: $effectiveSourceMode" }
     }
 
     Assert-SourceShape $sourceRoot
