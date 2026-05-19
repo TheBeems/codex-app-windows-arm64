@@ -92,15 +92,43 @@ jobs:
         with:
           node-version: latest
 
-      - name: Allow Windows PowerShell installer scripts
-        shell: cmd
-        run: powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser -Force"
-
       - id: python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-          architecture: x64
+        name: Set up Python for node-gyp
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pythonVersion = "3.12.10"
+          $pythonDir = Join-Path $env:RUNNER_TEMP "python-$pythonVersion"
+          $installer = Join-Path $env:RUNNER_TEMP "python-$pythonVersion-amd64.exe"
+          $python = Join-Path $pythonDir "python.exe"
+
+          if (-not (Test-Path -LiteralPath $python)) {
+            if (Test-Path -LiteralPath $pythonDir) {
+              Remove-Item -LiteralPath $pythonDir -Recurse -Force
+            }
+
+            Invoke-WebRequest `
+              -UseBasicParsing `
+              -Uri "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-amd64.exe" `
+              -OutFile $installer
+
+            $arguments = @(
+              "/quiet",
+              "InstallAllUsers=0",
+              "TargetDir=$pythonDir",
+              "PrependPath=0",
+              "Include_launcher=0",
+              "Include_test=0"
+            )
+            $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+            if ($process.ExitCode -ne 0) {
+              throw "Python installer failed with exit code $($process.ExitCode)."
+            }
+          }
+
+          & $python --version
+          $pythonDir >> $env:GITHUB_PATH
+          "python-path=$python" >> $env:GITHUB_OUTPUT
 
       - name: Enable pnpm
         shell: pwsh
