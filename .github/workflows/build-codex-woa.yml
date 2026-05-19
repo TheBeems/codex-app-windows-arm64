@@ -92,9 +92,9 @@ jobs:
         with:
           node-version: latest
 
-      - name: Allow setup-python installer scripts
-        shell: pwsh
-        run: Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser -Force
+      - name: Allow Windows PowerShell installer scripts
+        shell: cmd
+        run: powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope CurrentUser -Force"
 
       - id: python
         uses: actions/setup-python@v6
