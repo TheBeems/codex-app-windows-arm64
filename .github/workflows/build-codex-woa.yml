@@ -95,7 +95,11 @@ jobs:
       - name: Enable pnpm
         shell: pwsh
         run: |
-          corepack enable
+          $corepackDir = Join-Path $env:RUNNER_TEMP "corepack"
+          New-Item -ItemType Directory -Path $corepackDir -Force | Out-Null
+          corepack enable --install-directory $corepackDir
+          $corepackDir >> $env:GITHUB_PATH
+          $env:PATH = "$corepackDir;$env:PATH"
           corepack prepare pnpm@latest --activate
           pnpm --version
 
