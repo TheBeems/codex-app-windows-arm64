@@ -1,0 +1,222 @@
+name: Build Codex WoA
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: Build even when the Store version is not newer than the latest release
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  check:
+    name: Check Store Version
+    runs-on: windows-latest
+    outputs:
+      should_build: ${{ steps.store.outputs.should_build }}
+      store_version: ${{ steps.store.outputs.store_version }}
+      release_tag: ${{ steps.store.outputs.release_tag }}
+      msix_url: ${{ steps.store.outputs.msix_url }}
+      msix_file: ${{ steps.store.outputs.msix_file }}
+      msix_sha1: ${{ steps.store.outputs.msix_sha1 }}
+    steps:
+      - id: previous_run
+        name: Stop Scheduled Runs After Failure
+        if: github.event_name == 'schedule'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $runs = gh run list `
+            --repo $env:GITHUB_REPOSITORY `
+            --workflow $env:GITHUB_WORKFLOW `
+            --status completed `
+            --limit 100 `
+            --json conclusion,databaseId,url `
+            | ConvertFrom-Json
+
+          foreach ($run in $runs) {
+            $jobs = gh run view $run.databaseId `
+              --repo $env:GITHUB_REPOSITORY `
+              --json jobs `
+              | ConvertFrom-Json
+
+            $buildJob = $jobs.jobs | Where-Object { $_.name -eq "Build And Release" } | Select-Object -First 1
+            if (-not $buildJob -or $buildJob.conclusion -eq "skipped") {
+              continue
+            }
+
+            if ($buildJob.conclusion -eq "failure") {
+              "continue=false" >> $env:GITHUB_OUTPUT
+              "Latest completed build job failed: $($run.url)" >> $env:GITHUB_STEP_SUMMARY
+              exit 0
+            }
+
+            break
+          }
+
+          "continue=true" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v6
+        if: steps.previous_run.outputs.continue != 'false'
+
+      - id: store
+        name: Resolve Latest Store MSIX
+        if: steps.previous_run.outputs.continue != 'false'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .\scripts\Get-CodexStorePackage.ps1 -Repo $env:GITHUB_REPOSITORY
+
+  build:
+    name: Build And Release
+    needs: check
+    if: needs.check.outputs.should_build == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_build)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: latest
+
+      - name: Enable pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - id: download
+        name: Download Official Store MSIX
+        shell: pwsh
+        env:
+          MSIX_URL: ${{ needs.check.outputs.msix_url }}
+          MSIX_FILE: ${{ needs.check.outputs.msix_file }}
+          MSIX_SHA1: ${{ needs.check.outputs.msix_sha1 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sourceDir = Join-Path $env:RUNNER_TEMP "codex-source"
+          New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
+          $sourceMsix = Join-Path $sourceDir $env:MSIX_FILE
+
+          Invoke-WebRequest -UseBasicParsing -Uri $env:MSIX_URL -OutFile $sourceMsix
+
+          $actualSha1 = (Get-FileHash -Algorithm SHA1 -LiteralPath $sourceMsix).Hash
+          if ($actualSha1 -ne $env:MSIX_SHA1) {
+            throw "SHA-1 mismatch. Expected $env:MSIX_SHA1 but got $actualSha1."
+          }
+
+          "source_msix=$sourceMsix" >> $env:GITHUB_OUTPUT
+
+      - name: Build ARM64 MSIX
+        shell: pwsh
+        env:
+          SOURCE_MSIX: ${{ steps.download.outputs.source_msix }}
+        run: |
+          .\Build-CodexWoA.ps1 `
+            -SourceMode Msix `
+            -SourceMsixPath $env:SOURCE_MSIX `
+            -OutputDir .\dist `
+            -InstallVsDependencies `
+            -Force
+
+      - name: Archive Dist
+        shell: pwsh
+        run: |
+          Push-Location .\dist
+          7z a ..\dist.7z `
+            .\Codex-WoA_*_arm64.msix `
+            .\cert\CodexWoA.cer `
+            .\Install.ps1 `
+            .\Install.bat `
+            .\build-report.json
+          Pop-Location
+
+      - name: Generate Scoop Manifest
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+          STORE_VERSION: ${{ needs.check.outputs.store_version }}
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath .\dist.7z).Hash.ToLowerInvariant()
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/dist.7z"
+          New-Item -ItemType Directory -Path .\bucket -Force | Out-Null
+          $manifest = [ordered]@{
+            version = $env:STORE_VERSION
+            description = "Unofficial Windows ARM64 repackaging of the OpenAI Codex app."
+            homepage = "https://github.com/$env:GITHUB_REPOSITORY"
+            license = "MIT"
+            architecture = [ordered]@{
+              arm64 = [ordered]@{
+                url = $url
+                hash = $hash
+              }
+            }
+            installer = [ordered]@{
+              script = @(
+                '$msix = Get-ChildItem -LiteralPath $dir -Filter "Codex-WoA_*_arm64.msix" | Select-Object -First 1'
+                '$cer = Join-Path $dir "CodexWoA.cer"'
+                'if (-not $msix) { throw "Codex WoA MSIX not found." }'
+                'if (-not (Test-Path -LiteralPath $cer)) { $cer = Join-Path $dir "cert\CodexWoA.cer" }'
+                '& (Join-Path $dir "Install.ps1") -MsixPath $msix.FullName -CerPath $cer'
+                'if ($LASTEXITCODE) { exit $LASTEXITCODE }'
+              )
+            }
+            uninstaller = [ordered]@{
+              script = 'Get-AppxPackage -Name "OpenAI.Codex.WoA" | Remove-AppxPackage'
+            }
+            notes = "Install.ps1 imports the included local signing certificate into TrustedPeople and may request elevation."
+          }
+
+          $json = $manifest | ConvertTo-Json -Depth 8
+          $json | Set-Content -LiteralPath .\codex-woa.json -Encoding UTF8
+          $json | Set-Content -LiteralPath .\bucket\codex-woa.json -Encoding UTF8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-woa-${{ needs.check.outputs.release_tag }}
+          path: |
+            dist.7z
+            codex-woa.json
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+          STORE_VERSION: ${{ needs.check.outputs.store_version }}
+        run: |
+          $notes = @"
+          Windows ARM64 repackaged build for Codex $env:STORE_VERSION.
+
+          Source package: official Microsoft Store OpenAI.Codex x64 MSIX.
+          This package is locally signed by the workflow-generated Codex WoA certificate included in the archive.
+          "@
+
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
+          }
+
+          gh release create $env:RELEASE_TAG dist.7z codex-woa.json --title $env:RELEASE_TAG --notes $notes
+
+      - name: Commit Scoop Manifest
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/codex-woa.json
+          git commit -m "Update Scoop manifest for Codex $env:RELEASE_TAG"
+          git push

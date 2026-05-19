@@ -17,15 +17,29 @@ OpenAI, Codex, and ChatGPT are trademarks of OpenAI. All other trademarks are th
 ## Requirements
 
 - A Windows on ARM device.
-- The official Codex app installed from Microsoft Store as the x64 package.
+- The official Codex app installed from Microsoft Store as the x64 package, or an official x64 Codex MSIX downloaded from Microsoft Store CDN.
 - PowerShell 7 (`pwsh`) is recommended. Windows PowerShell is used only as a fallback.
-- Node.js with `node`, `npm`, and `npx` available on `PATH`.
+- Node.js with `node` and `pnpm` available on `PATH`.
 - Windows SDK tools, including `makeappx.exe` and `signtool.exe`.
 - `tar.exe` available on `PATH` for extracting upstream Linux ARM64 runtime assets.
 - Visual Studio C++ desktop build tools with the ARM64 C++ toolchain.
 - Internet access for downloading Electron, Node.js, Codex helper binaries, ripgrep, and native module build dependencies.
 
 ## Quick Install From Release
+
+With Scoop:
+
+```powershell
+scoop bucket add codex-woa https://github.com/airtaxi/codex-app-windows-arm64
+scoop install codex-woa
+```
+
+Update normally:
+
+```powershell
+scoop update
+scoop update codex-woa
+```
 
 Download the release zip from the [GitHub Releases](https://github.com/airtaxi/codex-app-windows-arm64/releases) page, extract it, and run:
 
@@ -46,6 +60,8 @@ Build-CodexWoA.bat -SourceMode Installed -Force
 `-SourceMode Installed` uses the official x64 Codex package already installed from Microsoft Store.
 
 `-SourceMode StoreLatest` does not download an MSIX directly. It opens Microsoft Store so you can install or update Codex officially, then continues by using the installed x64 package.
+
+`-SourceMode Msix -SourceMsixPath <path>` extracts an official x64 Codex MSIX directly and uses it as the source package.
 
 The default output directory is `dist`.
 
