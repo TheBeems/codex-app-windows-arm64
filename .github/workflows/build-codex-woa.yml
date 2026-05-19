@@ -93,41 +93,18 @@ jobs:
           node-version: latest
 
       - id: python
-        name: Set up Python for node-gyp
+        name: Use system Python for node-gyp
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $pythonVersion = "3.12.10"
-          $pythonDir = Join-Path $env:RUNNER_TEMP "python-$pythonVersion"
-          $installer = Join-Path $env:RUNNER_TEMP "python-$pythonVersion-amd64.exe"
-          $python = Join-Path $pythonDir "python.exe"
-
-          if (-not (Test-Path -LiteralPath $python)) {
-            if (Test-Path -LiteralPath $pythonDir) {
-              Remove-Item -LiteralPath $pythonDir -Recurse -Force
-            }
-
-            Invoke-WebRequest `
-              -UseBasicParsing `
-              -Uri "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-amd64.exe" `
-              -OutFile $installer
-
-            $arguments = @(
-              "/quiet",
-              "InstallAllUsers=0",
-              "TargetDir=$pythonDir",
-              "PrependPath=0",
-              "Include_launcher=0",
-              "Include_test=0"
-            )
-            $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
-            if ($process.ExitCode -ne 0) {
-              throw "Python installer failed with exit code $($process.ExitCode)."
-            }
+          $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+          if ($python -like "*\Microsoft\WindowsApps\python.exe") {
+            throw "PATH resolved to the Microsoft Store Python alias instead of an installed Python: $python"
           }
 
+          Write-Host "Using Python: $python"
           & $python --version
-          $pythonDir >> $env:GITHUB_PATH
+          Split-Path -Parent $python >> $env:GITHUB_PATH
           "python-path=$python" >> $env:GITHUB_OUTPUT
 
       - name: Enable pnpm
