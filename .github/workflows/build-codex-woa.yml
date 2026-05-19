@@ -82,6 +82,9 @@ jobs:
     needs: check
     if: needs.check.outputs.should_build == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_build)
     runs-on: [self-hosted, Windows, X64, codex-woa]
+    concurrency:
+      group: codex-woa-build-${{ needs.check.outputs.release_tag }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v6
 
