@@ -81,10 +81,7 @@ jobs:
     name: Build And Release
     needs: check
     if: needs.check.outputs.should_build == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_build)
-    runs-on: [self-hosted, Windows, X64, codex-woa]
-    concurrency:
-      group: codex-woa-build-${{ needs.check.outputs.release_tag }}
-      cancel-in-progress: false
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -92,26 +89,10 @@ jobs:
         with:
           node-version: latest
 
-      - id: python
-        name: Use system Python for node-gyp
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
-
-          Write-Host "Using Python: $python"
-          & $python --version
-          Split-Path -Parent $python >> $env:GITHUB_PATH
-          "python-path=$python" >> $env:GITHUB_OUTPUT
-
       - name: Enable pnpm
         shell: pwsh
         run: |
-          $corepackDir = Join-Path $env:RUNNER_TEMP "corepack"
-          New-Item -ItemType Directory -Path $corepackDir -Force | Out-Null
-          corepack enable --install-directory $corepackDir
-          $corepackDir >> $env:GITHUB_PATH
-          $env:PATH = "$corepackDir;$env:PATH"
+          corepack enable
           corepack prepare pnpm@latest --activate
           pnpm --version
 
@@ -141,8 +122,6 @@ jobs:
         shell: pwsh
         env:
           SOURCE_MSIX: ${{ steps.download.outputs.source_msix }}
-          PYTHON: ${{ steps.python.outputs.python-path }}
-          npm_config_python: ${{ steps.python.outputs.python-path }}
         run: |
           .\Build-CodexWoA.ps1 `
             -SourceMode Msix `
