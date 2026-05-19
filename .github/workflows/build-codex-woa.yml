@@ -81,7 +81,7 @@ jobs:
     name: Build And Release
     needs: check
     if: needs.check.outputs.should_build == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_build)
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, codex-woa]
     steps:
       - uses: actions/checkout@v6
 
