@@ -1,12 +1,12 @@
 {
-  "version": "26.519.2736.0",
+  "version": "26.519.3891.0",
   "description": "Unofficial Windows ARM64 repackaging of the OpenAI Codex app.",
   "homepage": "https://github.com/airtaxi/codex-app-windows-arm64",
   "license": "MIT",
   "architecture": {
     "arm64": {
-      "url": "https://github.com/airtaxi/codex-app-windows-arm64/releases/download/26.519.2736/dist.7z",
-      "hash": "1752b5014372da4d564efee65fd5d50406e690dc870a20f8474355f168300804"
+      "url": "https://github.com/airtaxi/codex-app-windows-arm64/releases/download/26.519.3891/dist.7z",
+      "hash": "25ccdf6ad5782fd40ba14292cfb41c6f3e4e86a122b7ffec8553d23ddbd8631c"
     }
   },
   "installer": {
