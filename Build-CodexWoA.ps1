@@ -12,6 +12,8 @@ param(
 
     [string]$DisplayName = "Codex WoA",
 
+    [string]$PackageVersionOverride = "",
+
     [string]$PublisherSubject = "CN=Codex WoA Local",
 
     [string]$CodexReleaseTag = "latest",
@@ -191,6 +193,28 @@ function Normalize-PercentEncodedScopedPackageDirs {
     if ($normalized.Count -gt 0) {
         Add-Replacement $Label "normalized" ($normalized -join ", ")
     }
+}
+
+function Resolve-PackageVersionOverride {
+    param([string]$Version)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return ""
+    }
+
+    $trimmed = $Version.Trim()
+    if ($trimmed -notmatch "^\d+\.\d+\.\d+\.\d+$") {
+        throw "-PackageVersionOverride must be a four-part MSIX version, for example 26.527.3686.1."
+    }
+
+    $parts = @($trimmed.Split(".") | ForEach-Object { [int]$_ })
+    foreach ($part in $parts) {
+        if ($part -lt 0 -or $part -gt 65535) {
+            throw "-PackageVersionOverride parts must be between 0 and 65535: $trimmed"
+        }
+    }
+
+    return ([version]$trimmed).ToString()
 }
 
 function Find-WindowsKitTool {
@@ -2146,7 +2170,8 @@ function Update-AppxManifest {
         [string]$ManifestPath,
         [string]$IdentityName,
         [string]$DisplayNameValue,
-        [string]$PublisherValue
+        [string]$PublisherValue,
+        [string]$VersionValue = ""
     )
 
     Write-Step "Rewriting AppxManifest.xml"
@@ -2163,6 +2188,9 @@ function Update-AppxManifest {
     $identity.SetAttribute("Name", $IdentityName)
     $identity.SetAttribute("ProcessorArchitecture", "arm64")
     $identity.SetAttribute("Publisher", $PublisherValue)
+    if (-not [string]::IsNullOrWhiteSpace($VersionValue)) {
+        $identity.SetAttribute("Version", $VersionValue)
+    }
 
     $properties = $manifest.SelectSingleNode("/f:Package/f:Properties", $ns)
     if ($null -ne $properties) {
@@ -2661,6 +2689,7 @@ function Main {
     if ([string]::IsNullOrWhiteSpace($OutputDir)) {
         $OutputDir = $script:DefaultOutputDir
     }
+    $resolvedPackageVersionOverride = Resolve-PackageVersionOverride $PackageVersionOverride
 
     $resolvedOutputDir = New-Item -ItemType Directory -Path $OutputDir -Force
     $resolvedOutputDir = (Resolve-Path -LiteralPath $resolvedOutputDir.FullName).Path
@@ -2725,7 +2754,10 @@ function Main {
     Repack-AppAsar $asarExtractDir $resourcesDir
 
     $manifestPath = Join-Path $stageRoot "AppxManifest.xml"
-    Update-AppxManifest $manifestPath $PackageIdentity $DisplayName $PublisherSubject
+    Update-AppxManifest $manifestPath $PackageIdentity $DisplayName $PublisherSubject $resolvedPackageVersionOverride
+    if (-not [string]::IsNullOrWhiteSpace($resolvedPackageVersionOverride)) {
+        Add-Replacement "package-version" "overridden" $resolvedPackageVersionOverride
+    }
 
     [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
     $version = $manifest.Package.Identity.Version

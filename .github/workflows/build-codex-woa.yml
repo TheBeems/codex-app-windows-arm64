@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      package_version_override:
+        description: Optional four-part MSIX package version to stamp into the build
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "17 * * * *"
 
@@ -75,12 +80,13 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: .\scripts\Get-CodexStorePackage.ps1 -Repo $env:GITHUB_REPOSITORY
+          VERSION_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version_override || '' }}
+        run: .\scripts\Get-CodexStorePackage.ps1 -Repo $env:GITHUB_REPOSITORY -VersionOverride $env:VERSION_OVERRIDE
 
   build:
     name: Build And Release
     needs: check
-    if: needs.check.outputs.should_build == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_build)
+    if: needs.check.outputs.should_build == 'true' || (github.event_name == 'workflow_dispatch' && (inputs.force_build || inputs.package_version_override != ''))
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v6
@@ -122,6 +128,7 @@ jobs:
         shell: pwsh
         env:
           SOURCE_MSIX: ${{ steps.download.outputs.source_msix }}
+          PACKAGE_VERSION_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version_override || '' }}
         run: |
           $buildDrive = "W:"
           if (Test-Path "$buildDrive\") {
@@ -131,12 +138,18 @@ jobs:
           subst $buildDrive $env:GITHUB_WORKSPACE
           try {
             Push-Location "$buildDrive\"
-            .\Build-CodexWoA.ps1 `
-              -SourceMode Msix `
-              -SourceMsixPath $env:SOURCE_MSIX `
-              -OutputDir .\dist `
-              -InstallVsDependencies `
-              -Force
+            $buildArgs = @(
+              "-SourceMode", "Msix",
+              "-SourceMsixPath", $env:SOURCE_MSIX,
+              "-OutputDir", ".\dist",
+              "-InstallVsDependencies",
+              "-Force"
+            )
+            if (-not [string]::IsNullOrWhiteSpace($env:PACKAGE_VERSION_OVERRIDE)) {
+              $buildArgs += @("-PackageVersionOverride", $env:PACKAGE_VERSION_OVERRIDE)
+            }
+
+            .\Build-CodexWoA.ps1 @buildArgs
           }
           finally {
             Pop-Location

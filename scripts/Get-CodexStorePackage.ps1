@@ -4,7 +4,8 @@ param(
     [string]$ProductId = "9PLM9XGG6VKS",
     [string]$Repo = $env:GITHUB_REPOSITORY,
     [string]$Ring = "Retail",
-    [string]$Lang = "en-US"
+    [string]$Lang = "en-US",
+    [string]$VersionOverride = ""
 )
 
 Set-StrictMode -Version Latest
@@ -35,6 +36,28 @@ function Add-GitHubOutput {
     if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) {
         "$Name=$Value" >> $env:GITHUB_OUTPUT
     }
+}
+
+function Resolve-PackageVersionOverride {
+    param([string]$Version)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return $null
+    }
+
+    $trimmed = $Version.Trim()
+    if ($trimmed -notmatch "^\d+\.\d+\.\d+\.\d+$") {
+        throw "-VersionOverride must be a four-part MSIX version, for example 26.527.3686.1."
+    }
+
+    $parts = @($trimmed.Split(".") | ForEach-Object { [int]$_ })
+    foreach ($part in $parts) {
+        if ($part -lt 0 -or $part -gt 65535) {
+            throw "-VersionOverride parts must be between 0 and 65535: $trimmed"
+        }
+    }
+
+    return [version]$trimmed
 }
 
 $response = Invoke-WebRequest -UseBasicParsing `
@@ -84,10 +107,18 @@ if (-not [string]::IsNullOrWhiteSpace($Repo)) {
 }
 
 $latestReleaseVersion = Convert-TagToVersion $latestTag
-$shouldBuild = $storePackage.Version -gt $latestReleaseVersion
+$versionOverrideValue = Resolve-PackageVersionOverride $VersionOverride
+$effectivePackageVersion = $storePackage.Version
 $releaseTag = $storePackage.Version.ToString(3)
+$shouldBuild = $storePackage.Version -gt $latestReleaseVersion
+if ($null -ne $versionOverrideValue) {
+    $effectivePackageVersion = $versionOverrideValue
+    $releaseTag = $effectivePackageVersion.ToString()
+    $shouldBuild = $true
+}
 
 Write-Host "Store version:  $($storePackage.Version)"
+Write-Host "Package version: $effectivePackageVersion"
 Write-Host "Release tag:    $releaseTag"
 Write-Host "Latest release: $latestTag ($latestReleaseVersion)"
 Write-Host "MSIX file:      $($storePackage.File)"
@@ -96,7 +127,7 @@ Write-Host "MSIX expires:   $($storePackage.Expire)"
 Write-Host "Should build:   $shouldBuild"
 
 Add-GitHubOutput "should_build" $shouldBuild.ToString().ToLowerInvariant()
-Add-GitHubOutput "store_version" $storePackage.Version.ToString()
+Add-GitHubOutput "store_version" $effectivePackageVersion.ToString()
 Add-GitHubOutput "release_tag" $releaseTag
 Add-GitHubOutput "msix_url" $storePackage.Url
 Add-GitHubOutput "msix_file" $storePackage.File
@@ -105,6 +136,7 @@ Add-GitHubOutput "msix_sha1" $storePackage.Sha1
 [pscustomobject]@{
     shouldBuild = $shouldBuild
     storeVersion = $storePackage.Version.ToString()
+    packageVersion = $effectivePackageVersion.ToString()
     releaseTag = $releaseTag
     msixUrl = $storePackage.Url
     msixFile = $storePackage.File
