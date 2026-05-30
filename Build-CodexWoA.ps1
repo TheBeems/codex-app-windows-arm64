@@ -1834,6 +1834,10 @@ function Add-MsvcFrameAddressShim {
     }
 
     $shim = @"
+#ifndef NODE_ADDON_API_DISABLE_DEPRECATED
+#define NODE_ADDON_API_DISABLE_DEPRECATED
+#endif
+
 #if defined(_MSC_VER) && !defined(__clang__) && !defined(__builtin_frame_address)
 #include <intrin.h>
 #define __builtin_frame_address(level) _AddressOfReturnAddress()
