@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet("Prompt", "Installed", "StoreLatest", "Msix")]
+    [ValidateSet("Prompt", "StoreMsix", "Installed", "StoreLatest", "Msix")]
     [string]$SourceMode = "Prompt",
 
     [string]$SourceMsixPath = "",
@@ -352,10 +352,52 @@ function Get-InstalledCodexPackageOrNull {
 function Get-InstalledCodexPackage {
     $package = Get-InstalledCodexPackageOrNull
     if ($null -eq $package) {
-        throw "Installed OpenAI.Codex x64 package was not found. Install Codex from Microsoft Store first or use -SourceMode StoreLatest."
+        throw "Installed OpenAI.Codex x64 package was not found. Install Codex from Microsoft Store first or use -SourceMode StoreMsix."
     }
 
     return $package
+}
+
+function Resolve-LatestStoreMsix {
+    param(
+        [string]$ProductId = "9PLM9XGG6VKS",
+        [string]$Ring = "Retail",
+        [string]$Lang = "en-US"
+    )
+
+    Write-Step "Resolving latest Codex x64 MSIX from Microsoft Store"
+    $response = Invoke-WebRequest -UseBasicParsing `
+        -Uri "https://store.rg-adguard.net/api/GetFiles" `
+        -Method POST `
+        -Headers @{
+            Accept = "*/*"
+            Origin = "https://store.rg-adguard.net"
+            Referer = "https://store.rg-adguard.net/"
+        } `
+        -ContentType "application/x-www-form-urlencoded" `
+        -Body "type=ProductId&url=$ProductId&ring=$Ring&lang=$Lang"
+
+    $html = [string]$response.Content
+    $rowPattern = '<tr[^>]*>.*?<a\s+[^>]*href="(?<href>[^"]+)"[^>]*>(?<file>OpenAI\.Codex_(?<version>\d+\.\d+\.\d+\.\d+)_x64__[^<]+\.msix)</a>.*?<td[^>]*>(?<expire>[^<]*)</td>.*?<td[^>]*>(?<sha1>[a-fA-F0-9]{40})</td>.*?<td[^>]*>(?<size>[^<]*)</td>.*?</tr>'
+    $matches = [regex]::Matches($html, $rowPattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [Text.RegularExpressions.RegexOptions]::Singleline)
+
+    if ($matches.Count -eq 0) {
+        throw "Could not find OpenAI.Codex x64 MSIX in Microsoft Store response."
+    }
+
+    return $matches |
+        ForEach-Object {
+            [pscustomobject]@{
+                Version = [version]$_.Groups["version"].Value
+                File = [System.Net.WebUtility]::HtmlDecode($_.Groups["file"].Value)
+                Url = [System.Net.WebUtility]::HtmlDecode($_.Groups["href"].Value)
+                Sha1 = $_.Groups["sha1"].Value.ToUpperInvariant()
+                Expire = [System.Net.WebUtility]::HtmlDecode($_.Groups["expire"].Value)
+                Size = [System.Net.WebUtility]::HtmlDecode($_.Groups["size"].Value)
+            }
+        } |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
 }
 
 function Resolve-SourceMode {
@@ -367,14 +409,16 @@ function Resolve-SourceMode {
 
     Write-Host ""
     Write-Host "Select Codex x64 source package:"
-    Write-Host "  1. Installed Microsoft Store package"
-    Write-Host "  2. Open Microsoft Store, then use installed package"
-    Write-Host "  3. Local Microsoft Store MSIX file"
-    $choice = Read-Host "Choice [1/2/3]"
+    Write-Host "  1. Download latest Microsoft Store MSIX"
+    Write-Host "  2. Installed Microsoft Store package"
+    Write-Host "  3. Open Microsoft Store, then use installed package"
+    Write-Host "  4. Local Microsoft Store MSIX file"
+    $choice = Read-Host "Choice [1/2/3/4]"
     switch ($choice) {
-        "2" { return "StoreLatest" }
-        "3" { return "Msix" }
-        default { return "Installed" }
+        "2" { return "Installed" }
+        "3" { return "StoreLatest" }
+        "4" { return "Msix" }
+        default { return "StoreMsix" }
     }
 }
 
@@ -438,6 +482,53 @@ function Copy-StoreInstalledSource {
     $copied = Copy-InstalledSource $Destination
     $script:Report.source.kind = "StoreInstalled"
     $script:Report.source.storePageOpened = $true
+    return $copied
+}
+
+function Copy-StoreMsixSource {
+    param(
+        [string]$Destination,
+        [string]$CacheDir
+    )
+
+    $storePackage = Resolve-LatestStoreMsix
+    Write-Host "MSIX file:      $($storePackage.File)"
+    Write-Host "MSIX version:   $($storePackage.Version)"
+    Write-Host "MSIX SHA-1:     $($storePackage.Sha1)"
+    Write-Host "MSIX expires:   $($storePackage.Expire)"
+
+    $sourceDir = Join-Path $CacheDir "codex-source"
+    New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
+    $sourceMsix = Join-Path $sourceDir $storePackage.File
+
+    $needsDownload = $true
+    if (Test-Path -LiteralPath $sourceMsix) {
+        $cachedSha1 = (Get-FileHash -Algorithm SHA1 -LiteralPath $sourceMsix).Hash.ToUpperInvariant()
+        if ($cachedSha1 -eq $storePackage.Sha1) {
+            Write-Step "Using cached Store MSIX $sourceMsix"
+            $needsDownload = $false
+        }
+        else {
+            Write-Warn "Cached Store MSIX SHA-1 mismatch. Redownloading $($storePackage.File)."
+            Remove-IfExists $sourceMsix
+        }
+    }
+
+    if ($needsDownload) {
+        Download-File $storePackage.Url $sourceMsix
+    }
+
+    $actualSha1 = (Get-FileHash -Algorithm SHA1 -LiteralPath $sourceMsix).Hash.ToUpperInvariant()
+    if ($actualSha1 -ne $storePackage.Sha1) {
+        throw "SHA-1 mismatch. Expected $($storePackage.Sha1) but got $actualSha1."
+    }
+
+    $copied = Copy-MsixSource $sourceMsix $Destination
+    $script:Report.source.kind = "StoreMsix"
+    $script:Report.source["url"] = $storePackage.Url
+    $script:Report.source["sha1"] = $storePackage.Sha1
+    $script:Report.source["expire"] = $storePackage.Expire
+    $script:Report.source["size"] = $storePackage.Size
     return $copied
 }
 
@@ -2216,6 +2307,7 @@ function Main {
     $effectiveSourceMode = Resolve-SourceMode $SourceMode
     $sourceRoot = Join-Path $workDir "source"
     switch ($effectiveSourceMode) {
+        "StoreMsix" { Copy-StoreMsixSource $sourceRoot $cacheDir | Out-Null }
         "Installed" { Copy-InstalledSource $sourceRoot | Out-Null }
         "StoreLatest" { Copy-StoreInstalledSource $sourceRoot | Out-Null }
         "Msix" { Copy-MsixSource $SourceMsixPath $sourceRoot | Out-Null }

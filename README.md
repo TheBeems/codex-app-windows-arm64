@@ -54,8 +54,10 @@ Install.bat
 Run the build wrapper from this repository:
 
 ```bat
-Build-CodexWoA.bat -SourceMode Installed -Force
+Build-CodexWoA.bat -SourceMode StoreMsix -Force
 ```
+
+`-SourceMode StoreMsix` downloads the latest official Codex x64 MSIX from the Microsoft Store link, verifies its SHA-1 hash, and uses it as the source package.
 
 `-SourceMode Installed` uses the official x64 Codex package already installed from Microsoft Store.
 

@@ -54,8 +54,10 @@ Install.bat
 이 저장소에서 빌드 래퍼를 실행합니다.
 
 ```bat
-Build-CodexWoA.bat -SourceMode Installed -Force
+Build-CodexWoA.bat -SourceMode StoreMsix -Force
 ```
+
+`-SourceMode StoreMsix`는 최신 공식 Codex x64 MSIX를 Microsoft Store 링크에서 다운로드하고 SHA-1을 검증한 뒤 소스 패키지로 사용합니다.
 
 `-SourceMode Installed`는 Microsoft Store에서 이미 설치된 공식 Codex x64 패키지를 사용합니다.
 
