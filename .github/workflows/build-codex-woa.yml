@@ -123,12 +123,25 @@ jobs:
         env:
           SOURCE_MSIX: ${{ steps.download.outputs.source_msix }}
         run: |
-          .\Build-CodexWoA.ps1 `
-            -SourceMode Msix `
-            -SourceMsixPath $env:SOURCE_MSIX `
-            -OutputDir .\dist `
-            -InstallVsDependencies `
-            -Force
+          $buildDrive = "W:"
+          if (Test-Path "$buildDrive\") {
+            subst $buildDrive /D
+          }
+
+          subst $buildDrive $env:GITHUB_WORKSPACE
+          try {
+            Push-Location "$buildDrive\"
+            .\Build-CodexWoA.ps1 `
+              -SourceMode Msix `
+              -SourceMsixPath $env:SOURCE_MSIX `
+              -OutputDir .\dist `
+              -InstallVsDependencies `
+              -Force
+          }
+          finally {
+            Pop-Location
+            subst $buildDrive /D
+          }
 
       - name: Archive Dist
         shell: pwsh
