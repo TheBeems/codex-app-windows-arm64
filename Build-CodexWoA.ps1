@@ -151,6 +151,48 @@ function Copy-DirectoryMergeRobust {
     }
 }
 
+function Normalize-PercentEncodedScopedPackageDirs {
+    param(
+        [string]$Root,
+        [string]$Label
+    )
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        return
+    }
+
+    $normalized = New-Object "System.Collections.Generic.List[string]"
+    $encodedDirs = @(Get-ChildItem -LiteralPath $Root -Recurse -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match "(?i)%40" } |
+        Sort-Object { $_.FullName.Length } -Descending)
+
+    foreach ($dir in $encodedDirs) {
+        if (-not (Test-Path -LiteralPath $dir.FullName)) {
+            continue
+        }
+
+        $decodedName = $dir.Name -replace "(?i)%40", "@"
+        if ($decodedName -eq $dir.Name) {
+            continue
+        }
+
+        $target = Join-Path $dir.Parent.FullName $decodedName
+        if (Test-Path -LiteralPath $target) {
+            Copy-DirectoryMergeRobust $dir.FullName $target
+            Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+        }
+        else {
+            Rename-Item -LiteralPath $dir.FullName -NewName $decodedName
+        }
+
+        $normalized.Add((Get-RelativePath $Root $target)) | Out-Null
+    }
+
+    if ($normalized.Count -gt 0) {
+        Add-Replacement $Label "normalized" ($normalized -join ", ")
+    }
+}
+
 function Find-WindowsKitTool {
     param([string]$ToolName)
 
@@ -2656,9 +2698,11 @@ function Main {
     $appDir = Join-Path $stageRoot "app"
     $resourcesDir = Join-Path $appDir "resources"
     $asarExtractDir = Join-Path $workDir "app-asar"
+    Normalize-PercentEncodedScopedPackageDirs $resourcesDir "resource-scoped-package-dirs"
 
     Write-Step "Extracting app.asar"
     Extract-AppAsar $resourcesDir $asarExtractDir
+    Normalize-PercentEncodedScopedPackageDirs $asarExtractDir "asar-scoped-package-dirs"
 
     $electronVersion = Read-ElectronVersion $appDir $asarExtractDir
     $nodeVersion = Read-NodeVersion (Join-Path $resourcesDir "node.exe")
