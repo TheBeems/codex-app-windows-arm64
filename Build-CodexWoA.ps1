@@ -1812,17 +1812,23 @@ function Enable-ChromeExtensionHostX64Fallback {
     Add-Replacement "chrome-extension-host" "x64-emulated-arm64-path" "copied bundled x64 extension-host.exe to extension-host\windows\arm64; no installManifest.mjs patch"
 }
 
+function Get-PluginClassicLevelPackageDirs {
+    param([string]$ResourcesDir)
+
+    $bundledRoot = Join-Path $ResourcesDir "plugins\openai-bundled"
+    if (-not (Test-Path -LiteralPath $bundledRoot)) {
+        return @()
+    }
+
+    return @(Get-ChildItem -LiteralPath $bundledRoot -Recurse -Directory -Filter "classic-level" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "\\node_modules\\classic-level$" })
+}
+
 function Prune-PluginClassicLevelNonArm64WindowsPrebuilds {
     param([string]$ResourcesDir)
 
-    $pluginsRoot = Join-Path $ResourcesDir "plugins\openai-bundled\plugins"
-    if (-not (Test-Path -LiteralPath $pluginsRoot)) {
-        return
-    }
-
     $removed = New-Object "System.Collections.Generic.List[string]"
-    $classicLevelDirs = @(Get-ChildItem -LiteralPath $pluginsRoot -Recurse -Directory -Filter "classic-level" -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "\\node_modules\\classic-level$" })
+    $classicLevelDirs = @(Get-PluginClassicLevelPackageDirs $ResourcesDir)
     foreach ($classicLevelDir in $classicLevelDirs) {
         $prebuildRootPath = Join-Path $classicLevelDir.FullName "prebuilds"
         if (-not (Test-Path -LiteralPath $prebuildRootPath)) {
@@ -1839,6 +1845,45 @@ function Prune-PluginClassicLevelNonArm64WindowsPrebuilds {
 
     if ($removed.Count -gt 0) {
         Add-Replacement "classic-level-non-arm64-windows-prebuilds" "pruned" ($removed -join ", ")
+    }
+}
+
+function Rebuild-PluginClassicLevelArm64NativeModules {
+    param([string]$ResourcesDir)
+
+    Require-CommandPath "node" | Out-Null
+    Require-CommandPath "pnpm" | Out-Null
+
+    $rebuilt = New-Object "System.Collections.Generic.List[string]"
+    $classicLevelDirs = @(Get-PluginClassicLevelPackageDirs $ResourcesDir)
+    foreach ($classicLevelDir in $classicLevelDirs) {
+        Push-Location $classicLevelDir.FullName
+        try {
+            Invoke-Checked "pnpm" @(
+                "dlx",
+                "node-gyp",
+                "rebuild",
+                "--arch=arm64"
+            )
+        }
+        finally {
+            Pop-Location
+        }
+
+        $builtNode = Join-Path $classicLevelDir.FullName "build\Release\classic_level.node"
+        if (-not (Test-Path -LiteralPath $builtNode)) {
+            throw "classic-level ARM64 build output was not found: $builtNode"
+        }
+
+        if ((Get-PeMachine $builtNode) -ne "arm64") {
+            throw "classic-level build did not produce an ARM64 binary: $builtNode"
+        }
+
+        $rebuilt.Add((Get-RelativePath $ResourcesDir $classicLevelDir.FullName)) | Out-Null
+    }
+
+    if ($rebuilt.Count -gt 0) {
+        Add-Replacement "classic-level" "arm64" ($rebuilt -join ", ")
     }
 }
 
@@ -2414,6 +2459,32 @@ function Ensure-CertificateInStore {
     Write-Host "Certificate trust confirmed in $StoreLabel."
 }
 
+function Clear-CodexBundledPluginCache {
+    $cacheRoot = Join-Path $env:USERPROFILE ".codex\plugins\cache\openai-bundled"
+    if (-not (Test-Path -LiteralPath $cacheRoot)) {
+        return
+    }
+
+    $cacheDirs = @(
+        (Join-Path $cacheRoot "browser"),
+        (Join-Path $cacheRoot "chrome")
+    )
+
+    foreach ($cacheDir in $cacheDirs) {
+        if (-not (Test-Path -LiteralPath $cacheDir)) {
+            continue
+        }
+
+        try {
+            Write-Host "Clearing bundled plugin cache: $cacheDir"
+            Remove-Item -LiteralPath $cacheDir -Recurse -Force
+        }
+        catch {
+            Write-Warning "Could not clear bundled plugin cache '$cacheDir': $($_.Exception.Message). Close Codex and remove this directory manually before retesting bundled plugins."
+        }
+    }
+}
+
 $MsixPath = [System.IO.Path]::GetFullPath($MsixPath)
 $CerPath = [System.IO.Path]::GetFullPath($CerPath)
 
@@ -2446,6 +2517,7 @@ if ($signatureAfterTrust.Status -ne "Valid") {
 
 Write-Host "Installing $MsixPath..."
 Add-AppxPackage -Path $MsixPath
+Clear-CodexBundledPluginCache
 Write-Host "Done."
 '@
 
@@ -2746,6 +2818,7 @@ function Main {
     Remove-WindowsUpdaterNative $resourcesDir
     Enable-ChromeExtensionHostX64Fallback $resourcesDir
     Prune-PluginClassicLevelNonArm64WindowsPrebuilds $resourcesDir
+    Rebuild-PluginClassicLevelArm64NativeModules $resourcesDir
     Enable-ComputerUseX64Fallback $resourcesDir
 
     Build-Arm64NativeModules $asarExtractDir $electronVersion $workDir
