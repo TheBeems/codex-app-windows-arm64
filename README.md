@@ -84,7 +84,7 @@ The certificate is generated locally when needed and is not committed to the rep
 - Rewrites `AppxManifest.xml` for an ARM64 package identity.
 - Replaces the Electron runtime with `win32-arm64`.
 - Replaces bundled Node.js with `win-arm64`.
-- Rebuilds in-process native modules such as `better-sqlite3` and `node-pty` for ARM64.
+- Rebuilds in-process native modules such as `better-sqlite3`, `node-pty`, and plugin `classic-level` for ARM64.
 - Disables the native Windows updater for the locally signed package.
 - Replaces ARM64 helper executables when upstream ARM64 assets are available.
 - Adds and validates an ARM64 WSL Codex runtime source at `app\resources\codex` and `app\resources\codex-resources\bwrap`.
