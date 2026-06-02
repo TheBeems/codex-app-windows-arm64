@@ -1,12 +1,12 @@
 {
-  "version": "26.527.7698.0",
+  "version": "26.601.1994.0",
   "description": "Unofficial Windows ARM64 repackaging of the OpenAI Codex app.",
   "homepage": "https://github.com/TheBeems/codex-app-windows-arm64",
   "license": "MIT",
   "architecture": {
     "arm64": {
-      "url": "https://github.com/TheBeems/codex-app-windows-arm64/releases/download/26.527.7698/dist.7z",
-      "hash": "33e2470879f68429d54b4aecd9aa829b10ac5d968bb49ffe051bcbbd437c86b5"
+      "url": "https://github.com/TheBeems/codex-app-windows-arm64/releases/download/26.601.1994/dist.7z",
+      "hash": "409a4f7915e17ea754b41d552bced1317e4e37b514dfb5c1fb7e1ef04c00aa27"
     }
   },
   "installer": {
