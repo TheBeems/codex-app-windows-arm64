@@ -2539,10 +2539,11 @@ function Ensure-CertificateInStore {
 }
 
 function Clear-CodexBundledPluginCache {
-    $cacheRoot = Join-Path $env:USERPROFILE ".codex\plugins\cache\openai-bundled"
-    if (-not (Test-Path -LiteralPath $cacheRoot)) {
-        return
-    }
+    $codexHome = Join-Path $env:USERPROFILE ".codex"
+    $cacheRoot = Join-Path $codexHome "plugins\cache\openai-bundled"
+    $marketplaceRoot = Join-Path $codexHome ".tmp\bundled-marketplaces\openai-bundled"
+
+    Stop-CodexBundledRuntimeProcesses $marketplaceRoot
 
     $cacheDirs = @(
         (Join-Path $cacheRoot "browser"),
@@ -2561,6 +2562,42 @@ function Clear-CodexBundledPluginCache {
         }
         catch {
             Write-Warning "Could not clear bundled plugin cache '$cacheDir': $($_.Exception.Message). Close Codex and remove this directory manually before retesting bundled plugins."
+        }
+    }
+
+    if (Test-Path -LiteralPath $marketplaceRoot) {
+        try {
+            Write-Host "Clearing bundled plugin marketplace: $marketplaceRoot"
+            Remove-Item -LiteralPath $marketplaceRoot -Recurse -Force
+        }
+        catch {
+            Write-Warning "Could not clear bundled plugin marketplace '$marketplaceRoot': $($_.Exception.Message). Close Codex and remove this directory manually before retesting bundled plugins."
+        }
+    }
+}
+
+function Stop-CodexBundledRuntimeProcesses {
+    param([string]$MarketplaceRoot)
+
+    if ([string]::IsNullOrWhiteSpace($MarketplaceRoot) -or -not (Test-Path -LiteralPath $MarketplaceRoot)) {
+        return
+    }
+
+    $resolvedRoot = [System.IO.Path]::GetFullPath($MarketplaceRoot).TrimEnd('\') + '\'
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $path = $_.ExecutablePath
+            -not [string]::IsNullOrWhiteSpace($path) -and
+            [System.IO.Path]::GetFullPath($path).StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        })
+
+    foreach ($process in $processes) {
+        try {
+            Write-Host "Stopping bundled plugin helper process $($process.ProcessId): $($process.ExecutablePath)"
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Could not stop bundled plugin helper process $($process.ProcessId): $($_.Exception.Message)"
         }
     }
 }
