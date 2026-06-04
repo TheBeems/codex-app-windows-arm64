@@ -182,6 +182,7 @@ jobs:
             description = "Unofficial Windows ARM64 repackaging of the OpenAI Codex app."
             homepage = "https://github.com/$env:GITHUB_REPOSITORY"
             license = "MIT"
+            depends = "7zip"
             architecture = [ordered]@{
               arm64 = [ordered]@{
                 url = $url
