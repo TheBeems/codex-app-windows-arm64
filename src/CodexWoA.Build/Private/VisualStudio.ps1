@@ -246,7 +246,7 @@ function Ensure-VisualStudioArm64Tools {
     $detectedMissingComponents = @($arm64ToolComponents | Where-Object { -not (Test-VsComponentInstalled $_ $vsInfo.installationPath) })
     $missingComponents = if ($toolchainFilesPresent) { @() } else { @($detectedMissingComponents) }
 
-    $script:Report.visualStudio = [ordered]@{
+    $script:Context.Report.visualStudio = [ordered]@{
         displayName = $vsInfo.displayName
         installationPath = $vsInfo.installationPath
         installationVersion = $vsInfo.installationVersion
@@ -266,8 +266,8 @@ function Ensure-VisualStudioArm64Tools {
         $toolchainFilesPresent = Test-Arm64CppToolchainFiles $vsInfo.toolsetPath
         $detectedMissingComponents = @($arm64ToolComponents | Where-Object { -not (Test-VsComponentInstalled $_ $vsInfo.installationPath) })
         $missingComponents = if ($toolchainFilesPresent) { @() } else { @($detectedMissingComponents) }
-        $script:Report.visualStudio.missingComponents = @($missingComponents)
-        $script:Report.visualStudio.arm64ToolchainFilesPresent = $toolchainFilesPresent
+        $script:Context.Report.visualStudio.missingComponents = @($missingComponents)
+        $script:Context.Report.visualStudio.arm64ToolchainFilesPresent = $toolchainFilesPresent
         if ($toolchainFilesPresent) {
             return
         }

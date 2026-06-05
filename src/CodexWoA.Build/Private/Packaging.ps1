@@ -104,8 +104,8 @@ function Ensure-SigningCertificate {
     $cerPath = Join-Path $CertificateDir "CodexWoA.cer"
     Export-Certificate -Cert $cert -FilePath $cerPath -Force | Out-Null
 
-    $script:Report.outputs.certificate = $cerPath
-    $script:Report.outputs.certificateThumbprint = $cert.Thumbprint
+    $script:Context.Report.outputs.certificate = $cerPath
+    $script:Context.Report.outputs.certificateThumbprint = $cert.Thumbprint
     return $cert
 }
 
@@ -116,7 +116,7 @@ function New-InstallScript {
         [string]$CerRelativePath
     )
 
-    $content = Get-Content -LiteralPath (Join-Path $script:ScriptRoot "src\CodexWoA.Build\Templates\Install.ps1") -Raw
+    $content = Get-Content -LiteralPath (Join-Path $script:Context.Paths.RepoRoot "src\CodexWoA.Build\Templates\Install.ps1") -Raw
 
     $content = $content.
         Replace("__MSIX_FILE_NAME__", $MsixFileName).
@@ -128,7 +128,7 @@ function New-InstallScript {
 function New-InstallBatchScript {
     param([string]$OutputPath)
 
-    $content = Get-Content -LiteralPath (Join-Path $script:ScriptRoot "src\CodexWoA.Build\Templates\Install.bat") -Raw
+    $content = Get-Content -LiteralPath (Join-Path $script:Context.Paths.RepoRoot "src\CodexWoA.Build\Templates\Install.bat") -Raw
 
     Set-TextUtf8NoBom $OutputPath $content
 }

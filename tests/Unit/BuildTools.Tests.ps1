@@ -15,4 +15,11 @@ Describe "Pinned build tools" {
         $nativeContent = Get-Content -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build\Private\NativeModules.ps1") -Raw
         $nativeContent | Should -Not -Match '"latest"'
     }
+
+    It "passes electron-rebuild modules as one compatible argument" {
+        $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        $nativeContent = Get-Content -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build\Private\NativeModules.ps1") -Raw
+        $nativeContent | Should -Match '"better-sqlite3,node-pty"'
+        $nativeContent | Should -Not -Match '"better-sqlite3",\s*\r?\n\s*"-w"'
+    }
 }

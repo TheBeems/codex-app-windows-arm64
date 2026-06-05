@@ -5,7 +5,7 @@ function Write-Step {
 
 function Write-Warn {
     param([string]$Message)
-    $script:Report.warnings.Add($Message)
+    $script:Context.Report.warnings.Add($Message)
     Write-Warning $Message
 }
 
@@ -16,7 +16,7 @@ function Add-Replacement {
         [string]$Detail = ""
     )
 
-    $script:Report.replacements.Add([ordered]@{
+    $script:Context.Report.replacements.Add([ordered]@{
         name = $Name
         status = $Status
         detail = $Detail
@@ -384,123 +384,4 @@ function Get-RelativePath {
 
 
 
-function Main {
-    if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-        $OutputDir = $script:DefaultOutputDir
-    }
-    $resolvedPackageVersionOverride = Resolve-PackageVersionOverride $PackageVersionOverride
 
-    $resolvedOutputDir = New-Item -ItemType Directory -Path $OutputDir -Force
-    $resolvedOutputDir = (Resolve-Path -LiteralPath $resolvedOutputDir.FullName).Path
-    $workDir = New-CleanDirectory (Join-Path $resolvedOutputDir "work")
-    $cacheDir = New-Item -ItemType Directory -Path (Join-Path $resolvedOutputDir "cache") -Force
-    $cacheDir = (Resolve-Path -LiteralPath $cacheDir.FullName).Path
-
-    $makeAppx = Find-WindowsKitTool "makeappx.exe"
-    $signTool = Find-WindowsKitTool "signtool.exe"
-    $mt = Find-WindowsKitTool "mt.exe"
-    $script:Report.tools = [ordered]@{
-        makeAppx = $makeAppx
-        signTool = $signTool
-        mt = $mt
-    }
-
-    Ensure-VisualStudioArm64Tools
-
-    $effectiveSourceMode = Resolve-SourceMode $SourceMode
-    $sourceRoot = Join-Path $workDir "source"
-    switch ($effectiveSourceMode) {
-        "StoreMsix" { Copy-StoreMsixSource $sourceRoot $cacheDir | Out-Null }
-        "Installed" { Copy-InstalledSource $sourceRoot | Out-Null }
-        "StoreLatest" { Copy-StoreInstalledSource $sourceRoot | Out-Null }
-        "Msix" { Copy-MsixSource $SourceMsixPath $sourceRoot | Out-Null }
-        default { throw "Unsupported source mode: $effectiveSourceMode" }
-    }
-
-    Assert-SourceShape $sourceRoot
-
-    $stageRoot = Join-Path $workDir "stage"
-    Write-Step "Preparing staging package"
-    New-CleanDirectory $stageRoot | Out-Null
-    Copy-DirectoryRobust $sourceRoot $stageRoot
-    Remove-SourcePackageMetadata $stageRoot
-
-    $appDir = Join-Path $stageRoot "app"
-    $resourcesDir = Join-Path $appDir "resources"
-    $asarExtractDir = Join-Path $workDir "app-asar"
-    Normalize-PercentEncodedScopedPackageDirs $resourcesDir "resource-scoped-package-dirs"
-
-    Write-Step "Extracting app.asar"
-    Extract-AppAsar $resourcesDir $asarExtractDir
-    Normalize-PercentEncodedScopedPackageDirs $asarExtractDir "asar-scoped-package-dirs"
-
-    $electronVersion = Read-ElectronVersion $appDir $asarExtractDir
-    $nodeVersion = Read-NodeVersion (Join-Path $resourcesDir "node.exe")
-    $script:Report.versions.electron = $electronVersion
-    $script:Report.versions.node = $nodeVersion
-
-    Install-Arm64ElectronRuntime $appDir $electronVersion $cacheDir
-    Install-Arm64Node $resourcesDir $nodeVersion $cacheDir
-    Install-Arm64CodexHelpers $resourcesDir $cacheDir $CodexReleaseTag
-    Patch-WindowsSandboxSetupAsInvokerManifest $resourcesDir $signTool $mt $workDir
-    Install-Arm64WslCodexRuntime $stageRoot $resourcesDir $asarExtractDir $cacheDir $CodexReleaseTag
-    Install-Arm64Ripgrep $resourcesDir $cacheDir
-    Remove-WindowsUpdaterNative $resourcesDir
-    Enable-ChromeExtensionHostX64Fallback $resourcesDir
-    Prune-PluginClassicLevelNonArm64WindowsPrebuilds $resourcesDir
-    Rebuild-PluginClassicLevelArm64NativeModules $resourcesDir
-    Enable-ComputerUseX64Fallback $resourcesDir
-
-    Build-Arm64NativeModules $asarExtractDir $electronVersion $workDir
-
-    Write-Step "Repacking app.asar"
-    Repack-AppAsar $asarExtractDir $resourcesDir
-
-    $manifestPath = Join-Path $stageRoot "AppxManifest.xml"
-    Update-AppxManifest $manifestPath $PackageIdentity $DisplayName $PublisherSubject $resolvedPackageVersionOverride
-    if (-not [string]::IsNullOrWhiteSpace($resolvedPackageVersionOverride)) {
-        Add-Replacement "package-version" "overridden" $resolvedPackageVersionOverride
-    }
-
-    [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
-    $version = $manifest.Package.Identity.Version
-    $script:Report.versions.package = $version
-
-    $certDir = Join-Path $resolvedOutputDir "cert"
-    $certificate = Ensure-SigningCertificate $PublisherSubject $certDir
-
-    $msixFileName = "Codex-WoA_$version`_arm64.msix"
-    $msixPath = Join-Path $resolvedOutputDir $msixFileName
-    if ((Test-Path -LiteralPath $msixPath) -and -not $Force) {
-        throw "Output MSIX already exists: $msixPath. Use -Force to overwrite."
-    }
-
-    Pack-And-SignMsix $stageRoot $msixPath $makeAppx $signTool $certificate
-    Test-MsixPackage $msixPath (Join-Path $workDir "verify") $makeAppx $signTool $mt $PackageIdentity $certificate.Thumbprint
-
-    $installScriptPath = Join-Path $resolvedOutputDir "Install.ps1"
-    New-InstallScript $installScriptPath $msixFileName "cert\CodexWoA.cer"
-    $installBatchPath = Join-Path $resolvedOutputDir "Install.bat"
-    New-InstallBatchScript $installBatchPath
-
-    $script:Report.outputs.msix = $msixPath
-    $script:Report.outputs.installScript = $installScriptPath
-    $script:Report.outputs.installBatch = $installBatchPath
-    $script:Report.finishedAt = (Get-Date).ToString("o")
-
-    $reportPath = Join-Path $resolvedOutputDir "build-report.json"
-    $script:Report.outputs.report = $reportPath
-    $script:Report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $reportPath -Encoding UTF8
-
-    if (-not $KeepWorkDir) {
-        Remove-IfExists $workDir
-    }
-
-    Write-Host ""
-    Write-Host "Codex WoA package created:" -ForegroundColor Green
-    Write-Host "  MSIX: $msixPath"
-    Write-Host "  Certificate: $(Join-Path $certDir 'CodexWoA.cer')"
-    Write-Host "  Installer: $installScriptPath"
-    Write-Host "  Installer batch: $installBatchPath"
-    Write-Host "  Report: $reportPath"
-}

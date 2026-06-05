@@ -139,7 +139,7 @@ function Copy-InstalledSource {
     New-CleanDirectory $Destination | Out-Null
     Copy-DirectoryRobust $package.InstallLocation $Destination
 
-    $script:Report.source = [ordered]@{
+    $script:Context.Report.source = [ordered]@{
         kind = "Installed"
         packageFullName = $package.PackageFullName
         version = $package.Version.ToString()
@@ -187,8 +187,8 @@ function Copy-StoreInstalledSource {
 
     Read-Host "Press Enter after Codex x64 is installed or updated from Microsoft Store"
     $copied = Copy-InstalledSource $Destination
-    $script:Report.source.kind = "StoreInstalled"
-    $script:Report.source.storePageOpened = $true
+    $script:Context.Report.source.kind = "StoreInstalled"
+    $script:Context.Report.source.storePageOpened = $true
     return $copied
 }
 
@@ -231,11 +231,11 @@ function Copy-StoreMsixSource {
     }
 
     $copied = Copy-MsixSource $sourceMsix $Destination
-    $script:Report.source.kind = "StoreMsix"
-    $script:Report.source["url"] = $storePackage.Url
-    $script:Report.source["sha1"] = $storePackage.Sha1
-    $script:Report.source["expire"] = $storePackage.Expire
-    $script:Report.source["size"] = $storePackage.Size
+    $script:Context.Report.source.kind = "StoreMsix"
+    $script:Context.Report.source["url"] = $storePackage.Url
+    $script:Context.Report.source["sha1"] = $storePackage.Sha1
+    $script:Context.Report.source["expire"] = $storePackage.Expire
+    $script:Context.Report.source["size"] = $storePackage.Size
     return $copied
 }
 
@@ -271,7 +271,7 @@ function Copy-MsixSource {
         throw "MSIX architecture mismatch: $($identity.ProcessorArchitecture). Expected x64."
     }
 
-    $script:Report.source = [ordered]@{
+    $script:Context.Report.source = [ordered]@{
         kind = "Msix"
         path = $resolvedMsixPath
         packageFullName = "OpenAI.Codex_$($identity.Version)_x64__2p2nqsd0c76g0"

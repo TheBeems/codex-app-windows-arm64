@@ -120,10 +120,10 @@ function Install-Arm64WslCodexRuntime {
 
     Write-Step "Replacing WSL Codex runtime with linux-aarch64 from openai/codex"
     $release = Get-GitHubRelease "openai" "codex" $ReleaseTag
-    $script:Report.versions.codexRelease = $release.tag_name
+    $script:Context.Report.versions.codexRelease = $release.tag_name
     $payload = Get-Arm64WslCodexPayload $release $CacheDir
 
-    $packagedSeedDir = Join-Path $PackageRoot $script:WslPayloadRelativeDir
+    $packagedSeedDir = Join-Path $PackageRoot $script:Context.Paths.WslPayloadRelativeDir
     Copy-Arm64WslCodexPayload $payload $packagedSeedDir
     Add-Replacement "wsl-codex-packaged-source" "arm64" (Get-RelativePath $PackageRoot (Join-Path $packagedSeedDir "codex"))
     Add-Replacement "wsl-bwrap-packaged-source" "arm64" (Get-RelativePath $PackageRoot (Join-Path $packagedSeedDir "codex-resources\bwrap"))

@@ -259,7 +259,7 @@ function Test-MsixPackage {
         Write-Warn "Add-AppxPackage -WhatIf did not complete: $($_.Exception.Message)"
     }
 
-    $script:Report.validation = [ordered]@{
+    $script:Context.Report.validation = [ordered]@{
         manifestIdentity = $manifestResult.Identity
         manifestArchitecture = $manifestResult.Architecture
         executable = $manifestResult.Executable

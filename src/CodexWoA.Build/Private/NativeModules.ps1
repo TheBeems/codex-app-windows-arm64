@@ -240,7 +240,7 @@ function Invoke-NodeGypArm64ElectronRebuild {
     )
 
     $resolvedPackageDir = (Resolve-Path -LiteralPath $PackageDir).Path
-    $shortRoot = Join-Path $script:ScriptRoot "build\node-gyp"
+    $shortRoot = Join-Path $script:Context.Paths.RepoRoot "build\node-gyp"
     $shortRoot = New-Item -ItemType Directory -Path $shortRoot -Force
     $shortRoot = (Resolve-Path -LiteralPath $shortRoot.FullName).Path
 
@@ -360,8 +360,8 @@ function Install-Arm64WlDeviceKitNativeModules {
 
     $nodeHidVersion = Get-NpmPackageVersionFromDirectory $nodeHidDir
     $serialPortBindingsVersion = Get-NpmPackageVersionFromDirectory $serialPortBindingsDir
-    $script:Report.versions.nodeHid = $nodeHidVersion
-    $script:Report.versions.serialPortBindingsCpp = $serialPortBindingsVersion
+    $script:Context.Report.versions.nodeHid = $nodeHidVersion
+    $script:Context.Report.versions.serialPortBindingsCpp = $serialPortBindingsVersion
 
     $nodeHidUtilHeader = Join-Path $nodeHidDir "src\util.h"
     $serialPortHeader = Join-Path $serialPortBindingsDir "src\serialport.h"
@@ -402,8 +402,8 @@ function Build-Arm64NativeModules {
 
     $betterSqliteVersion = Get-NpmPackageVersion $AsarDir "better-sqlite3"
     $nodePtyVersion = Get-NpmPackageVersion $AsarDir "node-pty"
-    $script:Report.versions.betterSqlite3 = $betterSqliteVersion
-    $script:Report.versions.nodePty = $nodePtyVersion
+    $script:Context.Report.versions.betterSqlite3 = $betterSqliteVersion
+    $script:Context.Report.versions.nodePty = $nodePtyVersion
 
     $buildDir = New-CleanDirectory (Join-Path $WorkDir "native-build")
     Push-Location $buildDir
@@ -465,8 +465,7 @@ allowBuilds:
             "-v", $ElectronVersion,
             "--arch", "arm64",
             "--force",
-            "-w", "better-sqlite3",
-            "-w", "node-pty"
+            "-w", "better-sqlite3,node-pty"
         )
 
         Prune-NodePtyNonArm64Payloads $nodePtyDir

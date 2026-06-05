@@ -192,7 +192,7 @@ function Install-Arm64CodexHelpers {
 
     Write-Step "Replacing Codex helper executables from openai/codex"
     $release = Get-GitHubRelease "openai" "codex" $ReleaseTag
-    $script:Report.versions.codexRelease = $release.tag_name
+    $script:Context.Report.versions.codexRelease = $release.tag_name
 
     $mapping = @(
         @{ asset = "codex-aarch64-pc-windows-msvc.exe"; target = "codex.exe"; required = $false },

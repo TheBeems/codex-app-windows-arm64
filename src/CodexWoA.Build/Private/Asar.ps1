@@ -55,7 +55,7 @@ function Extract-AsarTolerant {
     )
 
     $node = Require-CommandPath "node"
-    $extractScript = Get-Content -LiteralPath (Join-Path $script:ScriptRoot "src\CodexWoA.Build\Tools\extract-asar-tolerant.js") -Raw
+    $extractScript = Get-Content -LiteralPath (Join-Path $script:Context.Paths.RepoRoot "src\CodexWoA.Build\Tools\extract-asar-tolerant.js") -Raw
 
     Invoke-Checked $node @("-e", $extractScript, $AsarPath, $Destination)
 }

@@ -33,10 +33,5 @@ function Invoke-CodexWoABuild {
     }
 
     $script:Context = New-BuildContext -Options $options -RepoRoot $repoRoot
-    $script:ScriptRoot = $script:Context.Paths.RepoRoot
-    $script:DefaultOutputDir = $script:Context.Paths.DefaultOutputDir
-    $script:WslPayloadRelativeDir = $script:Context.Paths.WslPayloadRelativeDir
-    $script:Report = $script:Context.Report
-
-    Main
+    Invoke-BuildOrchestration -Context $script:Context
 }
