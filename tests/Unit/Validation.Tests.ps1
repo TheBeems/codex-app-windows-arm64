@@ -36,4 +36,23 @@ Describe "Package validation helpers" {
         $result.PE | Should -Be "NotPE"
         $result.ELF | Should -Be "NotELF"
     }
+
+    It "preserves case-insensitive x64 fallback matching" {
+        $result = & (Get-Module CodexWoA.Build) {
+            $script:Context = [pscustomobject]@{
+                Policy = [pscustomobject]@{
+                    AllowedX64Fallbacks = @("app\resources\node_repl.exe")
+                }
+            }
+
+            $fallbacks = New-AllowedX64FallbackSet
+            [pscustomobject]@{
+                Type = $fallbacks.GetType().FullName
+                ContainsDifferentCase = $fallbacks.Contains("APP\RESOURCES\NODE_REPL.EXE")
+            }
+        }
+
+        $result.Type | Should -Match "^System\.Collections\.Generic\.HashSet"
+        $result.ContainsDifferentCase | Should -BeTrue
+    }
 }

@@ -116,7 +116,7 @@ function New-AllowedX64FallbackSet {
     foreach ($path in $script:Context.Policy.AllowedX64Fallbacks) {
         $fallbacks.Add($path) | Out-Null
     }
-    return $fallbacks
+    return ,$fallbacks
 }
 
 function Test-MsixPackage {
