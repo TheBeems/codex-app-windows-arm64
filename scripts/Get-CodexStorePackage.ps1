@@ -13,7 +13,12 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $repoRoot "src\CodexWoA.Build\CodexWoA.Build.psd1") -Force
-$result = Resolve-CodexStorePackage @PSBoundParameters
+$result = Resolve-CodexStorePackage `
+    -ProductId $ProductId `
+    -Repo $Repo `
+    -Ring $Ring `
+    -Lang $Lang `
+    -VersionOverride $VersionOverride
 
 Write-Host "Store version:  $($result.storeVersion)"
 Write-Host "Package version: $($result.packageVersion)"
