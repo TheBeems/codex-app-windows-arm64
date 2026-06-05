@@ -17,15 +17,18 @@ function New-BuildContext {
         outputs = [ordered]@{}
     }
 
+    $policyPath = Join-Path $script:ModuleRoot "Data\CompatibilityPolicy.psd1"
+    $policy = Import-PowerShellDataFile -LiteralPath $policyPath
+
     return [pscustomobject][ordered]@{
         Options = $Options
         Paths = [ordered]@{
             RepoRoot = $RepoRoot
             DefaultOutputDir = Join-Path $RepoRoot "dist"
-            WslPayloadRelativeDir = "app\resources"
+            WslPayloadRelativeDir = $policy.WslPayloadRelativeDir
         }
         Tools = [ordered]@{}
-        Policy = [ordered]@{}
+        Policy = $policy
         Report = $report
     }
 }
