@@ -36,14 +36,18 @@ Describe "Build-CodexWoA CLI contract" {
     }
 
     It "keeps the expected report sections" {
-        $content = Get-Content -LiteralPath $buildScriptPath -Raw
+        $content = Get-ChildItem -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build") -Recurse -File -Filter "*.ps1" |
+            Get-Content -Raw |
+            Out-String
         foreach ($section in @("versions", "replacements", "warnings", "validation", "outputs")) {
             $content | Should -Match "(?m)^\s+$section\s*="
         }
     }
 
     It "keeps source shape validation requirements" {
-        $content = Get-Content -LiteralPath $buildScriptPath -Raw
+        $content = Get-ChildItem -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build") -Recurse -File -Filter "*.ps1" |
+            Get-Content -Raw |
+            Out-String
         foreach ($path in @("AppxManifest.xml", "app\Codex.exe", "app\resources\app.asar", "app\resources\app.asar.unpacked")) {
             $content | Should -Match ([regex]::Escape($path))
         }
