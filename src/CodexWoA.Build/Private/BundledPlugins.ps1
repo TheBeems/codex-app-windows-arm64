@@ -73,7 +73,7 @@ function Rebuild-PluginClassicLevelArm64NativeModules {
         try {
             Invoke-Checked "pnpm" @(
                 "dlx",
-                "node-gyp",
+                "node-gyp@$($script:Context.Tools.NodeGyp)",
                 "rebuild",
                 "--arch=arm64"
             )
