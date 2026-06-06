@@ -73,6 +73,20 @@ Build-CodexWoA.bat -SourceMode StoreMsix -Force
 
 The default output directory is `dist`.
 
+### Development
+
+The build implementation lives in `src\CodexWoA.Build` and is grouped by build
+domain. `Build-CodexWoA.ps1` remains the stable command-line entrypoint.
+
+Run the fast parser, analyzer, JavaScript, and unit checks before committing:
+
+```powershell
+.\tests\Run-Checks.ps1 -InstallDependencies
+```
+
+See [docs/build-architecture.md](docs/build-architecture.md) for module boundaries
+and maintenance rules.
+
 ## Outputs
 
 A successful build creates:
