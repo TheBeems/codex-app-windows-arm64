@@ -181,10 +181,11 @@ function Download-File {
 
 function Get-SupplyChainPolicy {
     $contextVariable = Get-Variable -Name Context -Scope Script -ErrorAction SilentlyContinue
-    if ($null -ne $contextVariable -and
-        $null -ne $contextVariable.Value -and
-        $null -ne $contextVariable.Value.SupplyChainPolicy) {
-        return $contextVariable.Value.SupplyChainPolicy
+    if ($null -ne $contextVariable -and $null -ne $contextVariable.Value) {
+        $policyProperty = $contextVariable.Value.PSObject.Properties["SupplyChainPolicy"]
+        if ($null -ne $policyProperty -and $null -ne $policyProperty.Value) {
+            return $policyProperty.Value
+        }
     }
 
     return Import-PowerShellDataFile -LiteralPath (Join-Path $script:ModuleRoot "Data\SupplyChainPolicy.psd1")
@@ -447,7 +448,6 @@ function Get-RelativePath {
     $pathFull = [System.IO.Path]::GetFullPath($Path)
     return $pathFull.Substring($rootFull.Length + 1).Replace("/", "\")
 }
-
 
 
 

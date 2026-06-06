@@ -138,6 +138,47 @@ Describe "Supply-chain resolvers" {
         } | Should -Throw "*not allowed by policy*"
     }
 
+    It "lets optional Codex helper replacement fall back when an asset is missing" {
+        $resourcesDir = Join-Path $script:testRoot "resources"
+        New-Item -ItemType Directory -Path $resourcesDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $resourcesDir "codex-app-server.exe") -Value "original" -NoNewline
+
+        $result = & (Get-Module CodexWoA.Build) {
+            param($ResourcesDir, $CacheDir)
+            $script:Context = [pscustomobject]@{
+                Report = [ordered]@{
+                    versions = [ordered]@{}
+                    replacements = New-Object System.Collections.Generic.List[object]
+                    warnings = New-Object System.Collections.Generic.List[string]
+                    supplyChain = New-Object System.Collections.Generic.List[object]
+                }
+            }
+
+            function Get-GitHubReleaseFromPolicy {
+                [pscustomobject][ordered]@{
+                    Release = [pscustomobject]@{
+                        tag_name = "rust-v0.test"
+                        assets = @()
+                    }
+                    Owner = "openai"
+                    Repo = "codex"
+                    AssetNamePattern = ".*"
+                }
+            }
+
+            Install-Arm64CodexHelpers $ResourcesDir $CacheDir "latest"
+            [pscustomobject]@{
+                WarningCount = $script:Context.Report.warnings.Count
+                Fallbacks = @($script:Context.Report.replacements | Where-Object { $_.status -eq "fallback" }).Count
+                Original = Get-Content -LiteralPath (Join-Path $ResourcesDir "codex-app-server.exe") -Raw
+            }
+        } $resourcesDir $script:testRoot
+
+        $result.WarningCount | Should -Be 1
+        $result.Fallbacks | Should -Be 1
+        $result.Original | Should -Be "original"
+    }
+
     It "extracts and verifies a Node release checksum" {
         $cacheDir = Join-Path $script:testRoot "cache"
         New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null

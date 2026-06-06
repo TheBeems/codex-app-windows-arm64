@@ -42,4 +42,22 @@ Describe "Source package resolution" {
 
         { Resolve-CodexStorePackage -Html $badHtml } | Should -Throw "*control character*"
     }
+
+    It "rejects a source MSIX when Authenticode status is not valid" {
+        {
+            & (Get-Module CodexWoA.Build) {
+                function Get-AuthenticodeSignature {
+                    [pscustomobject]@{
+                        Status = "HashMismatch"
+                        SignerCertificate = [pscustomobject]@{
+                            Subject = "CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B"
+                            Issuer = "CN=Microsoft Marketplace CA G 024, O=Microsoft Corporation"
+                        }
+                    }
+                }
+
+                Assert-CodexSourceMsixSignature "C:\fake\OpenAI.Codex.msix"
+            }
+        } | Should -Throw "*expected Valid*"
+    }
 }

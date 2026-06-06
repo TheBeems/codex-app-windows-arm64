@@ -109,6 +109,9 @@ function Assert-CodexSourceMsixSignature {
     if ($null -eq $signature.SignerCertificate) {
         throw "Source MSIX does not contain an Authenticode signer: $MsixPath"
     }
+    if ($signature.Status -ne "Valid") {
+        throw "Source MSIX Authenticode signature is $($signature.Status), expected Valid: $MsixPath"
+    }
 
     $subject = $signature.SignerCertificate.Subject
     $issuer = $signature.SignerCertificate.Issuer

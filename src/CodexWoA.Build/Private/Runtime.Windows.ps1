@@ -194,7 +194,8 @@ function Install-Arm64CodexHelpers {
             if ($item.required) {
                 throw
             }
-            throw "Could not verify and replace $($item.target): $($_.Exception.Message)"
+            Write-Warn "Could not verify and replace optional helper $($item.target); keeping original fallback. $($_.Exception.Message)"
+            Add-Replacement $item.target "fallback" $_.Exception.Message
         }
     }
 }
