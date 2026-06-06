@@ -1,6 +1,7 @@
 # Codex App Windows ARM64
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![기여자](https://img.shields.io/github/contributors/airtaxi/codex-app-windows-arm64)](https://github.com/airtaxi/codex-app-windows-arm64/graphs/contributors)
 
 🌐 [English](README.md) | 한국어
 
@@ -102,6 +103,14 @@ Build-CodexWoA.bat -SourceMode StoreMsix -Force
 이 패키지는 Windows on ARM을 위한 best-effort 호환성 빌드입니다. 앱 실행, 로그인 흐름, 대화 사용, ARM64 `node-pty`, ARM64 `rg.exe` 교체는 로컬에서 검증했지만, 공식 OpenAI 지원을 대체하지는 않습니다.
 
 네이티브 의존성 업데이트, helper 바이너리 교체, 패키징 검증, Windows on ARM 런타임 동작과 관련된 제보와 pull request를 환영합니다.
+
+## 기여자
+
+이 프로젝트에 기여해 주신 모든 분들께 감사드립니다.
+
+<a href="https://github.com/airtaxi/codex-app-windows-arm64/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=airtaxi/codex-app-windows-arm64" alt="기여자" />
+</a>
 
 ## 라이선스
 

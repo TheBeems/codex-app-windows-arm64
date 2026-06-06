@@ -1,6 +1,7 @@
 # Codex App Windows ARM64
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Contributors](https://img.shields.io/github/contributors/airtaxi/codex-app-windows-arm64)](https://github.com/airtaxi/codex-app-windows-arm64/graphs/contributors)
 
 🌐 English | [한국어](README.ko.md)
 
@@ -116,6 +117,14 @@ The certificate is generated locally when needed and is not committed to the rep
 The package is a best-effort compatibility build for Windows on ARM. Basic app launch, login flow, conversation use, ARM64 `node-pty`, and ARM64 `rg.exe` replacement have been validated locally, but this is not a substitute for official OpenAI support.
 
 Reports and pull requests are welcome, especially for native dependency updates, helper binary replacement, packaging validation, and Windows on ARM runtime behavior.
+
+## Contributors
+
+Thanks to everyone who has contributed to this project.
+
+<a href="https://github.com/airtaxi/codex-app-windows-arm64/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=airtaxi/codex-app-windows-arm64" alt="Contributors" />
+</a>
 
 ## License
 
