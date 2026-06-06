@@ -197,6 +197,85 @@ function Invoke-WithTemporaryEnv {
     }
 }
 
+function Assert-NativeBuildMetadataSafe {
+    param(
+        [string]$PackageDir,
+        [string]$Label
+    )
+
+    $gypFiles = @(Get-ChildItem -LiteralPath $PackageDir -Recurse -File -Filter "*.gyp" -ErrorAction SilentlyContinue)
+    foreach ($gypFile in $gypFiles) {
+        $content = Get-Content -LiteralPath $gypFile.FullName -Raw
+        if ($content -match "(?m)['""]?(actions|rules)['""]?\s*:") {
+            throw "$Label contains executable gyp metadata in $($gypFile.FullName). Refusing to execute source-package build actions."
+        }
+    }
+}
+
+function Assert-PolicyNativePackageVersion {
+    param(
+        [string]$PackageDir,
+        [string]$PackageKey,
+        [string]$Label
+    )
+
+    $expected = (Get-SupplyChainPolicy).NativePackages[$PackageKey]
+    if ([string]::IsNullOrWhiteSpace($expected)) {
+        throw "No native package version policy is pinned for $Label."
+    }
+
+    $actual = Get-NpmPackageVersionFromDirectory $PackageDir
+    if ($actual -ne $expected) {
+        throw "$Label version $actual is not pinned in SupplyChainPolicy.psd1. Expected $expected."
+    }
+}
+
+function Get-PinnedNodeGypCommand {
+    $toolRoot = Join-Path $script:Context.Paths.RepoRoot "build\node-gyp-toolchain"
+    New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+
+    $packageJsonPath = Join-Path $toolRoot "package.json"
+    $packageJson = [ordered]@{
+        private = $true
+        devDependencies = [ordered]@{
+            "node-gyp" = $script:Context.Tools.NodeGyp
+        }
+    } | ConvertTo-Json -Depth 6
+    Set-TextUtf8NoBom $packageJsonPath $packageJson
+
+    $workspacePath = Join-Path $toolRoot "pnpm-workspace.yaml"
+    Set-TextUtf8NoBom $workspacePath @"
+packages:
+  - .
+allowBuilds: {}
+"@
+
+    Push-Location $toolRoot
+    try {
+        Invoke-Checked "pnpm" @("install", "--ignore-scripts", "--config.node-linker=hoisted") | Out-Null
+    }
+    finally {
+        Pop-Location
+    }
+
+    $nodeGypPackageJson = Join-Path $toolRoot "node_modules\node-gyp\package.json"
+    if (-not (Test-Path -LiteralPath $nodeGypPackageJson)) {
+        throw "Pinned node-gyp package was not installed: $nodeGypPackageJson"
+    }
+
+    $nodeGypPackage = Get-Content -LiteralPath $nodeGypPackageJson -Raw | ConvertFrom-Json
+    if ([string]$nodeGypPackage.version -ne $script:Context.Tools.NodeGyp) {
+        throw "Installed node-gyp version $($nodeGypPackage.version) does not match pinned version $($script:Context.Tools.NodeGyp)."
+    }
+
+    $command = Join-Path $toolRoot "node_modules\.bin\node-gyp.cmd"
+    if (-not (Test-Path -LiteralPath $command)) {
+        throw "Pinned node-gyp command was not found: $command"
+    }
+
+    return $command
+}
+
 function Add-MsvcFrameAddressShim {
     param([string]$Path)
 
@@ -267,9 +346,8 @@ function Invoke-NodeGypArm64ElectronRebuild {
 
     Push-Location $shortPackageDir
     try {
-        Invoke-Checked "pnpm" @(
-            "dlx",
-            "node-gyp@$($script:Context.Tools.NodeGyp)",
+        $nodeGyp = Get-PinnedNodeGypCommand
+        Invoke-Checked $nodeGyp @(
             "rebuild",
             "--arch=arm64",
             "--target=$ElectronVersion",
@@ -360,6 +438,10 @@ function Install-Arm64WlDeviceKitNativeModules {
 
     $nodeHidVersion = Get-NpmPackageVersionFromDirectory $nodeHidDir
     $serialPortBindingsVersion = Get-NpmPackageVersionFromDirectory $serialPortBindingsDir
+    Assert-PolicyNativePackageVersion $nodeHidDir "NodeHid" "node-hid"
+    Assert-PolicyNativePackageVersion $serialPortBindingsDir "SerialPortBindingsCpp" "serialport bindings-cpp"
+    Assert-NativeBuildMetadataSafe $nodeHidDir "node-hid"
+    Assert-NativeBuildMetadataSafe $serialPortBindingsDir "serialport bindings-cpp"
     $script:Context.Report.versions.nodeHid = $nodeHidVersion
     $script:Context.Report.versions.serialPortBindingsCpp = $serialPortBindingsVersion
 

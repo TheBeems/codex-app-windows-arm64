@@ -11,6 +11,14 @@ Describe "Extracted build artifacts" {
         $installTemplate | Should -Match "__CER_RELATIVE_PATH__"
     }
 
+    It "passes an expected thumbprint across elevated certificate trust" {
+        $installTemplate = Get-Content -LiteralPath (Join-Path $templateRoot "Install.ps1") -Raw
+        $installTemplate | Should -Match "ExpectedCerThumbprint"
+        $installTemplate | Should -Match "Assert-ExpectedCertificateThumbprint"
+        $installTemplate | Should -Match "X509Store"
+        $installTemplate | Should -Match "RemoveTrustedCertificateOnly"
+    }
+
     It "keeps the batch template pointed at Install.ps1" {
         Get-Content -LiteralPath (Join-Path $templateRoot "Install.bat") -Raw |
             Should -Match "Install\.ps1"

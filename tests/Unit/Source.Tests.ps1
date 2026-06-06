@@ -22,4 +22,24 @@ Describe "Source package resolution" {
     It "rejects invalid package version overrides" {
         { Resolve-CodexStorePackage -Html $html -VersionOverride "30.1" } | Should -Throw
     }
+
+    It "rejects Store package URLs outside the Microsoft delivery allowlist" {
+        $badHtml = @"
+<table>
+  <tr><td><a href="https://example.test/latest.msix">OpenAI.Codex_26.2.3.4_x64__2p2nqsd0c76g0.msix</a></td><td>latest</td><td>BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB</td><td>2 MB</td></tr>
+</table>
+"@
+
+        { Resolve-CodexStorePackage -Html $badHtml } | Should -Throw "*not allowlisted*"
+    }
+
+    It "rejects decoded Store metadata control characters" {
+        $badHtml = @"
+<table>
+  <tr><td><a href="https://tlu.dl.delivery.mp.microsoft.com/latest.msix&#10;release_tag=evil">OpenAI.Codex_26.2.3.4_x64__2p2nqsd0c76g0.msix</a></td><td>latest</td><td>BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB</td><td>2 MB</td></tr>
+</table>
+"@
+
+        { Resolve-CodexStorePackage -Html $badHtml } | Should -Throw "*control character*"
+    }
 }

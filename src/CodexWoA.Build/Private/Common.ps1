@@ -179,6 +179,94 @@ function Download-File {
     }
 }
 
+function Get-SupplyChainPolicy {
+    $contextVariable = Get-Variable -Name Context -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $contextVariable -and
+        $null -ne $contextVariable.Value -and
+        $null -ne $contextVariable.Value.SupplyChainPolicy) {
+        return $contextVariable.Value.SupplyChainPolicy
+    }
+
+    return Import-PowerShellDataFile -LiteralPath (Join-Path $script:ModuleRoot "Data\SupplyChainPolicy.psd1")
+}
+
+function Assert-SafeScalarValue {
+    param(
+        [string]$Name,
+        [AllowNull()]
+        [string]$Value
+    )
+
+    if ($null -eq $Value) {
+        return
+    }
+
+    if ($Value -match "[\x00-\x1F\x7F]") {
+        throw "$Name contains a control character and cannot cross a trust boundary."
+    }
+}
+
+function Assert-FileSha256 {
+    param(
+        [string]$Path,
+        [string]$ExpectedHash,
+        [string]$Label = $Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedHash) -or $ExpectedHash -notmatch "^[a-fA-F0-9]{64}$") {
+        throw "Missing SHA-256 policy for $Label."
+    }
+
+    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToUpperInvariant()
+    if ($actualHash -ne $ExpectedHash.ToUpperInvariant()) {
+        throw "$Label SHA-256 mismatch. Expected $($ExpectedHash.ToUpperInvariant()) but got $actualHash."
+    }
+}
+
+function Get-SupplyChainAssetHash {
+    param([string]$AssetName)
+
+    $hash = (Get-SupplyChainPolicy).AssetHashes[$AssetName]
+    if ([string]::IsNullOrWhiteSpace($hash)) {
+        throw "No supply-chain hash is pinned for asset: $AssetName"
+    }
+
+    return $hash
+}
+
+function Download-VerifiedFile {
+    param(
+        [string]$Url,
+        [string]$Destination,
+        [string]$AssetName = (Split-Path -Leaf $Destination)
+    )
+
+    if (-not (Test-Path -LiteralPath $Destination)) {
+        Download-File $Url $Destination
+    }
+
+    Assert-FileSha256 $Destination (Get-SupplyChainAssetHash $AssetName) $AssetName
+    return $Destination
+}
+
+function Resolve-PinnedReleaseTag {
+    param(
+        [string]$RequestedTag,
+        [string]$PinnedTag,
+        [string]$Label
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RequestedTag) -or $RequestedTag -eq "latest") {
+        return $PinnedTag
+    }
+
+    if ($RequestedTag -ne $PinnedTag) {
+        throw "$Label release tag '$RequestedTag' is not pinned in SupplyChainPolicy.psd1. Expected '$PinnedTag'."
+    }
+
+    return $RequestedTag
+}
+
 function Expand-ZipClean {
     param(
         [string]$ZipPath,
@@ -239,9 +327,6 @@ function Get-RelativePath {
     $pathFull = [System.IO.Path]::GetFullPath($Path)
     return $pathFull.Substring($rootFull.Length + 1).Replace("/", "\")
 }
-
-
-
 
 
 

@@ -95,9 +95,7 @@ function Install-Arm64ElectronRuntime {
     $zipName = "electron-v$ElectronVersion-win32-arm64.zip"
     $zipPath = Join-Path $CacheDir $zipName
     $url = "https://github.com/electron/electron/releases/download/v$ElectronVersion/$zipName"
-    if (-not (Test-Path -LiteralPath $zipPath)) {
-        Download-File $url $zipPath
-    }
+    Download-VerifiedFile $url $zipPath $zipName | Out-Null
 
     $runtimeDir = Join-Path $CacheDir "electron-win32-arm64-$ElectronVersion"
     Expand-ZipClean $zipPath $runtimeDir
@@ -134,9 +132,7 @@ function Install-Arm64Node {
     $zipName = "node-v$NodeVersion-win-arm64.zip"
     $zipPath = Join-Path $CacheDir $zipName
     $url = "https://nodejs.org/dist/v$NodeVersion/$zipName"
-    if (-not (Test-Path -LiteralPath $zipPath)) {
-        Download-File $url $zipPath
-    }
+    Download-VerifiedFile $url $zipPath $zipName | Out-Null
 
     $nodeDir = Join-Path $CacheDir "node-win-arm64-$NodeVersion"
     Expand-ZipClean $zipPath $nodeDir
@@ -191,6 +187,7 @@ function Install-Arm64CodexHelpers {
     )
 
     Write-Step "Replacing Codex helper executables from openai/codex"
+    $ReleaseTag = Resolve-PinnedReleaseTag $ReleaseTag (Get-SupplyChainPolicy).CodexReleaseTag "Codex helper"
     $release = Get-GitHubRelease "openai" "codex" $ReleaseTag
     $script:Context.Report.versions.codexRelease = $release.tag_name
 
@@ -211,6 +208,7 @@ function Install-Arm64CodexHelpers {
         try {
             $downloadPath = Join-Path $CacheDir $item.asset
             Download-GitHubReleaseAsset $release $item.asset $downloadPath | Out-Null
+            Assert-FileSha256 $downloadPath (Get-SupplyChainAssetHash $item.asset) $item.asset
             Copy-Item -LiteralPath $downloadPath -Destination $targetPath -Force
             Add-Replacement $item.target "arm64" $item.asset
         }
@@ -218,8 +216,7 @@ function Install-Arm64CodexHelpers {
             if ($item.required) {
                 throw
             }
-            Write-Warn "Could not replace $($item.target); keeping original out-of-process fallback. $($_.Exception.Message)"
-            Add-Replacement $item.target "fallback" $_.Exception.Message
+            throw "Could not verify and replace $($item.target): $($_.Exception.Message)"
         }
     }
 }
@@ -231,11 +228,13 @@ function Install-Arm64Ripgrep {
     )
 
     Write-Step "Replacing rg.exe with ripgrep arm64"
-    $release = Get-GitHubRelease "BurntSushi" "ripgrep" "latest"
+    $tag = (Get-SupplyChainPolicy).RipgrepReleaseTag
+    $release = Get-GitHubRelease "BurntSushi" "ripgrep" $tag
     $tag = $release.tag_name.TrimStart("v")
     $assetName = "ripgrep-$tag-aarch64-pc-windows-msvc.zip"
     $zipPath = Join-Path $CacheDir $assetName
     Download-GitHubReleaseAsset $release $assetName $zipPath | Out-Null
+    Assert-FileSha256 $zipPath (Get-SupplyChainAssetHash $assetName) $assetName
 
     $ripgrepDir = Join-Path $CacheDir "ripgrep-arm64-$tag"
     Expand-ZipClean $zipPath $ripgrepDir

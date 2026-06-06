@@ -16,6 +16,21 @@ Describe "Pinned build tools" {
         $nativeContent | Should -Not -Match '"latest"'
     }
 
+    It "does not execute node-gyp through registry-resolved dlx" {
+        $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        $nativeContent = Get-Content -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build\Private\NativeModules.ps1") -Raw
+        $pluginContent = Get-Content -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build\Private\BundledPlugins.ps1") -Raw
+        "$nativeContent`n$pluginContent" | Should -Not -Match '"dlx",\s*\r?\n\s*"node-gyp'
+        "$nativeContent`n$pluginContent" | Should -Match "Get-PinnedNodeGypCommand"
+    }
+
+    It "blocks source-package gyp actions before native rebuilds" {
+        $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        $nativeContent = Get-Content -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build\Private\NativeModules.ps1") -Raw
+        $pluginContent = Get-Content -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build\Private\BundledPlugins.ps1") -Raw
+        "$nativeContent`n$pluginContent" | Should -Match "Assert-NativeBuildMetadataSafe"
+    }
+
     It "passes electron-rebuild modules as one compatible argument" {
         $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
         $nativeContent = Get-Content -LiteralPath (Join-Path $repoRoot "src\CodexWoA.Build\Private\NativeModules.ps1") -Raw

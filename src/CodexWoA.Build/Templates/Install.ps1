@@ -3,6 +3,8 @@
 param(
     [string]$MsixPath = "",
     [string]$CerPath = "",
+    [string]$ExpectedCerThumbprint = "",
+    [switch]$RemoveTrustedCertificateOnly,
     [switch]$TrustCertificateOnly
 )
 
@@ -79,7 +81,10 @@ function Get-CurrentPowerShellExecutable {
 }
 
 function Invoke-ElevatedCertificateTrust {
-    param([string]$ResolvedCerPath)
+    param(
+        [string]$ResolvedCerPath,
+        [string]$ExpectedThumbprint
+    )
 
     Write-Host "LocalMachine certificate trust requires administrator rights. Requesting elevation..."
     $arguments = @(
@@ -87,11 +92,29 @@ function Invoke-ElevatedCertificateTrust {
         "-ExecutionPolicy", "Bypass",
         "-File", "`"$PSCommandPath`"",
         "-TrustCertificateOnly",
-        "-CerPath", "`"$ResolvedCerPath`""
+        "-CerPath", "`"$ResolvedCerPath`"",
+        "-ExpectedCerThumbprint", $ExpectedThumbprint
     )
     $process = Start-Process -FilePath (Get-CurrentPowerShellExecutable) -ArgumentList $arguments -Verb RunAs -Wait -PassThru
     if ($process.ExitCode -ne 0) {
         throw "Elevated certificate trust failed with exit code $($process.ExitCode)."
+    }
+}
+
+function Invoke-ElevatedCertificateRemoval {
+    param([string]$ExpectedThumbprint)
+
+    Write-Host "Rolling back LocalMachine certificate trust. Requesting elevation..."
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "`"$PSCommandPath`"",
+        "-RemoveTrustedCertificateOnly",
+        "-ExpectedCerThumbprint", $ExpectedThumbprint
+    )
+    $process = Start-Process -FilePath (Get-CurrentPowerShellExecutable) -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "Elevated certificate trust rollback failed with exit code $($process.ExitCode)."
     }
 }
 
@@ -107,7 +130,6 @@ function Test-CertificateInStore {
 
 function Ensure-CertificateInStore {
     param(
-        [string]$Path,
         [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
         [string]$StorePath,
         [string]$StoreLabel
@@ -119,13 +141,58 @@ function Ensure-CertificateInStore {
     }
 
     Write-Host "Trusting Codex WoA certificate in ${StoreLabel}: $($Certificate.Thumbprint)"
-    Import-Certificate -FilePath $Path -CertStoreLocation $StorePath | Out-Null
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("TrustedPeople", "LocalMachine")
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $store.Add($Certificate)
+    }
+    finally {
+        $store.Dispose()
+    }
 
     if (-not (Test-CertificateInStore $Certificate $StorePath)) {
         throw "Certificate import completed, but trust could not be confirmed in ${StoreLabel}: $($Certificate.Thumbprint)"
     }
 
     Write-Host "Certificate trust confirmed in $StoreLabel."
+}
+
+function Remove-CertificateFromStore {
+    param(
+        [string]$Thumbprint,
+        [string]$StoreLabel
+    )
+
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("TrustedPeople", "LocalMachine")
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $matches = $store.Certificates.Find(
+            [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+            $Thumbprint,
+            $false)
+        foreach ($certificate in $matches) {
+            Write-Host "Removing Codex WoA certificate from ${StoreLabel}: $Thumbprint"
+            $store.Remove($certificate)
+        }
+    }
+    finally {
+        $store.Dispose()
+    }
+}
+
+function Assert-ExpectedCertificateThumbprint {
+    param(
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [string]$ExpectedThumbprint
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedThumbprint)) {
+        throw "Expected certificate thumbprint is required for elevated trust operations."
+    }
+
+    if ($Certificate.Thumbprint -ne $ExpectedThumbprint) {
+        throw "Certificate thumbprint $($Certificate.Thumbprint) does not match expected thumbprint $ExpectedThumbprint."
+    }
 }
 
 function Clear-CodexBundledPluginCache {
@@ -158,17 +225,32 @@ function Clear-CodexBundledPluginCache {
 $machineStorePath = "Cert:\LocalMachine\TrustedPeople"
 $machineStoreLabel = "LocalMachine\TrustedPeople"
 
+if ($RemoveTrustedCertificateOnly) {
+    if (-not (Test-IsAdministrator)) {
+        throw "Removing a LocalMachine certificate requires administrator rights."
+    }
+    if ([string]::IsNullOrWhiteSpace($ExpectedCerThumbprint)) {
+        throw "Expected certificate thumbprint is required for elevated trust rollback."
+    }
+    Remove-CertificateFromStore $ExpectedCerThumbprint $machineStoreLabel
+    exit 0
+}
+
 $CerPath = [System.IO.Path]::GetFullPath($CerPath)
 if (-not (Test-Path -LiteralPath $CerPath)) {
     throw "Certificate not found: $CerPath"
 }
 $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CerPath)
+if ([string]::IsNullOrWhiteSpace($ExpectedCerThumbprint)) {
+    $ExpectedCerThumbprint = $cert.Thumbprint
+}
 
 if ($TrustCertificateOnly) {
     if (-not (Test-IsAdministrator)) {
         throw "Trusting a LocalMachine certificate requires administrator rights."
     }
-    Ensure-CertificateInStore $CerPath $cert $machineStorePath $machineStoreLabel
+    Assert-ExpectedCertificateThumbprint $cert $ExpectedCerThumbprint
+    Ensure-CertificateInStore $cert $machineStorePath $machineStoreLabel
     exit 0
 }
 
@@ -181,11 +263,12 @@ Write-Host "Checking MSIX signer..."
 $signature = Assert-MsixSignerMatchesCertificate $MsixPath $cert
 
 Write-Host "Checking certificate trust..."
-if ((-not (Test-CertificateInStore $cert $machineStorePath)) -and (-not (Test-IsAdministrator))) {
-    Invoke-ElevatedCertificateTrust $CerPath
+$certificateWasTrusted = Test-CertificateInStore $cert $machineStorePath
+if ((-not $certificateWasTrusted) -and (-not (Test-IsAdministrator))) {
+    Invoke-ElevatedCertificateTrust $CerPath $ExpectedCerThumbprint
 }
 
-Ensure-CertificateInStore $CerPath $cert $machineStorePath $machineStoreLabel
+Ensure-CertificateInStore $cert $machineStorePath $machineStoreLabel
 
 $signatureAfterTrust = Get-AuthenticodeSignature -LiteralPath $MsixPath
 if ($signatureAfterTrust.Status -ne "Valid") {
@@ -193,7 +276,25 @@ if ($signatureAfterTrust.Status -ne "Valid") {
 }
 
 Write-Host "Installing $MsixPath..."
-Add-AppxPackage -Path $MsixPath -ForceApplicationShutdown
+try {
+    Add-AppxPackage -Path $MsixPath -ForceApplicationShutdown
+}
+catch {
+    if (-not $certificateWasTrusted) {
+        try {
+            if (Test-IsAdministrator) {
+                Remove-CertificateFromStore $ExpectedCerThumbprint $machineStoreLabel
+            }
+            else {
+                Invoke-ElevatedCertificateRemoval $ExpectedCerThumbprint
+            }
+        }
+        catch {
+            Write-Warning "Could not roll back certificate trust: $($_.Exception.Message)"
+        }
+    }
+    throw
+}
 [Environment]::SetEnvironmentVariable("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE", "1", "User")
 Clear-CodexBundledPluginCache
 Write-Host "Done. Restart Codex to enable Computer Use."

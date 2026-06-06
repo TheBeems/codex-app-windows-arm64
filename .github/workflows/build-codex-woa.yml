@@ -120,11 +120,24 @@ jobs:
           New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
           $sourceMsix = Join-Path $sourceDir $env:MSIX_FILE
 
+          $uri = [uri]$env:MSIX_URL
+          if ($uri.Host -ne "tlu.dl.delivery.mp.microsoft.com") {
+            throw "Unexpected Store MSIX host: $($uri.Host)"
+          }
+
           Invoke-WebRequest -UseBasicParsing -Uri $env:MSIX_URL -OutFile $sourceMsix
 
           $actualSha1 = (Get-FileHash -Algorithm SHA1 -LiteralPath $sourceMsix).Hash
           if ($actualSha1 -ne $env:MSIX_SHA1) {
             throw "SHA-1 mismatch. Expected $env:MSIX_SHA1 but got $actualSha1."
+          }
+
+          $signature = Get-AuthenticodeSignature -LiteralPath $sourceMsix
+          if ($signature.SignerCertificate.Subject -ne "CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B") {
+            throw "Unexpected source MSIX signer: $($signature.SignerCertificate.Subject)"
+          }
+          if ($signature.SignerCertificate.Issuer -notlike "*Microsoft Marketplace CA*") {
+            throw "Unexpected source MSIX signer issuer: $($signature.SignerCertificate.Issuer)"
           }
 
           "source_msix=$sourceMsix" >> $env:GITHUB_OUTPUT

@@ -41,6 +41,7 @@ function Get-Arm64WslCodexPayload {
         foreach ($item in $assets) {
             $archivePath = Join-Path $payloadCacheDir $item.asset
             Download-GitHubReleaseAsset $Release $item.asset $archivePath | Out-Null
+            Assert-FileSha256 $archivePath (Get-SupplyChainAssetHash $item.asset) $item.asset
 
             $extractDirName = ($item.asset -replace "[^A-Za-z0-9_.-]", "_") -replace "\.tar\.gz$", ""
             $extractDir = Join-Path $payloadCacheDir $extractDirName
@@ -119,6 +120,7 @@ function Install-Arm64WslCodexRuntime {
     )
 
     Write-Step "Replacing WSL Codex runtime with linux-aarch64 from openai/codex"
+    $ReleaseTag = Resolve-PinnedReleaseTag $ReleaseTag (Get-SupplyChainPolicy).CodexReleaseTag "WSL Codex"
     $release = Get-GitHubRelease "openai" "codex" $ReleaseTag
     $script:Context.Report.versions.codexRelease = $release.tag_name
     $payload = Get-Arm64WslCodexPayload $release $CacheDir
