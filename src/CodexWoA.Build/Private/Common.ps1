@@ -5,7 +5,28 @@ function Write-Step {
 
 function Write-Warn {
     param([string]$Message)
-    $script:Context.Report.warnings.Add($Message)
+    try {
+        $report = $script:Context.Report
+    }
+    catch {
+        $report = $null
+    }
+
+    if ($null -ne $report) {
+        try {
+            $warnings = $report.warnings
+        }
+        catch {
+            $warnings = $null
+        }
+
+        if ($null -eq $warnings -and $report -is [System.Collections.IDictionary]) {
+            $warnings = $report["warnings"]
+        }
+        if ($null -ne $warnings) {
+            $warnings.Add($Message) | Out-Null
+        }
+    }
     Write-Warning $Message
 }
 
@@ -446,9 +467,6 @@ function Invoke-ControlledExtraction {
         Remove-IfExists $temp
     }
 }
-
-
-
 
 
 

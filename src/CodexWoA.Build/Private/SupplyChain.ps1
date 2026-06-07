@@ -112,7 +112,17 @@ function Download-VerifiedGitHubReleaseAsset {
     }
 
     $expectedHash = $digest.Substring("sha256:".Length).ToUpperInvariant()
-    if (-not (Test-Path -LiteralPath $Destination)) {
+    if (Test-Path -LiteralPath $Destination) {
+        try {
+            Assert-FileSha256 $Destination $expectedHash $AssetName
+        }
+        catch {
+            Write-Warn "Cached $Label asset $AssetName did not match release digest; refreshing cached download."
+            Remove-IfExists $Destination
+            Download-File $asset.browser_download_url $Destination
+        }
+    }
+    else {
         Download-File $asset.browser_download_url $Destination
     }
 

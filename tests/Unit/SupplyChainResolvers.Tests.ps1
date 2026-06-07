@@ -80,6 +80,11 @@ Describe "Supply-chain resolvers" {
         {
             & (Get-Module CodexWoA.Build) {
                 param($Release, $Path)
+                function Download-File {
+                    param($Url, $Destination)
+                    Set-Content -LiteralPath $Destination -Value "still tampered bytes" -NoNewline
+                }
+
                 Download-VerifiedGitHubReleaseAsset `
                     -Release $Release `
                     -Owner "owner" `
@@ -90,6 +95,53 @@ Describe "Supply-chain resolvers" {
                     -Label "tool"
             } $release $assetPath
         } | Should -Throw "*SHA-256 mismatch*"
+    }
+
+    It "refreshes a stale cached GitHub release asset before verifying the digest" {
+        $assetPath = Join-Path $script:testRoot "tool.zip"
+        Set-Content -LiteralPath $assetPath -Value "old release bytes" -NoNewline
+        $freshBytes = "new release bytes"
+        $hashPath = Join-Path $script:testRoot "fresh.zip"
+        Set-Content -LiteralPath $hashPath -Value $freshBytes -NoNewline
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $hashPath).Hash.ToLowerInvariant()
+        $release = [pscustomobject]@{
+            tag_name = "v2.0.0"
+            assets = @([pscustomobject]@{
+                    name = "tool.zip"
+                    id = 456
+                    digest = "sha256:$hash"
+                    browser_download_url = "https://example.test/tool.zip"
+                })
+        }
+
+        $result = & (Get-Module CodexWoA.Build) {
+            param($Release, $Path, $FreshBytes)
+            $script:downloadCount = 0
+            function Download-File {
+                param($Url, $Destination)
+                $script:downloadCount++
+                Set-Content -LiteralPath $Destination -Value $FreshBytes -NoNewline
+            }
+
+            $resolved = Download-VerifiedGitHubReleaseAsset `
+                -Release $Release `
+                -Owner "owner" `
+                -Repo "repo" `
+                -AssetName "tool.zip" `
+                -Destination $Path `
+                -AssetNamePattern "^tool\.zip$" `
+                -Label "tool"
+
+            [pscustomobject]@{
+                Path = $resolved
+                DownloadCount = $script:downloadCount
+                Content = Get-Content -LiteralPath $Path -Raw
+            }
+        } $release $assetPath $freshBytes
+
+        $result.Path | Should -Be $assetPath
+        $result.DownloadCount | Should -Be 1
+        $result.Content | Should -Be $freshBytes
     }
 
     It "rejects prerelease GitHub releases when policy does not allow them" {
