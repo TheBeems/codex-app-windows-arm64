@@ -22,8 +22,8 @@ OpenAI, Codex, and ChatGPT are trademarks of OpenAI. All other trademarks are th
 - PowerShell 7 (`pwsh`) is recommended. Windows PowerShell is used only as a fallback.
 - Node.js with `node` and `pnpm` available on `PATH`.
 - Git and GPG for supply-chain verification. Git for Windows satisfies both
-  requirements because the build can use `C:\Program Files\Git\usr\bin\gpg.exe`
-  when `gpg` is not on `PATH`.
+  requirements because the build can discover Git's bundled `usr\bin\gpg.exe`
+  even when `gpg` is not on `PATH`.
 - Windows SDK tools, including `makeappx.exe`, `signtool.exe`, and `mt.exe`.
 - `tar.exe` available on `PATH` for extracting upstream Linux ARM64 runtime assets.
 - Visual Studio C++ desktop build tools with the ARM64 C++ toolchain.

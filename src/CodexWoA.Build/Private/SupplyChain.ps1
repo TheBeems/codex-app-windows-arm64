@@ -218,12 +218,86 @@ function Get-GpgCommandPath {
         return $command.Source
     }
 
-    $gitGpg = "C:\Program Files\Git\usr\bin\gpg.exe"
-    if (Test-Path -LiteralPath $gitGpg) {
-        return $gitGpg
+    foreach ($gitRoot in Get-GitRootCandidates) {
+        foreach ($relativePath in @("usr\bin\gpg.exe", "bin\gpg.exe")) {
+            $candidate = Join-Path $gitRoot $relativePath
+            if (Test-Path -LiteralPath $candidate) {
+                return $candidate
+            }
+        }
     }
 
     throw "Required command not found: gpg. Install GnuPG or Git for Windows with gpg.exe to verify Node release checksums."
+}
+
+function Get-GitRootCandidates {
+    $roots = New-Object "System.Collections.Generic.List[string]"
+    $seen = New-Object "System.Collections.Generic.HashSet[string]" ([System.StringComparer]::OrdinalIgnoreCase)
+
+    function Add-GitRootCandidate {
+        param([AllowNull()][string]$Path)
+
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            return
+        }
+
+        try {
+            $fullPath = [System.IO.Path]::GetFullPath($Path)
+        }
+        catch {
+            return
+        }
+
+        if ($seen.Add($fullPath)) {
+            $roots.Add($fullPath) | Out-Null
+        }
+    }
+
+    function Add-GitAncestorCandidates {
+        param([AllowNull()][string]$Path)
+
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            return
+        }
+
+        try {
+            $directory = if ([System.IO.Directory]::Exists($Path)) {
+                [System.IO.DirectoryInfo]::new([System.IO.Path]::GetFullPath($Path))
+            }
+            else {
+                [System.IO.FileInfo]::new([System.IO.Path]::GetFullPath($Path)).Directory
+            }
+        }
+        catch {
+            return
+        }
+
+        for ($i = 0; $null -ne $directory -and $i -lt 8; $i++) {
+            Add-GitRootCandidate $directory.FullName
+            $directory = $directory.Parent
+        }
+    }
+
+    $gitCommand = Get-Command "git" -ErrorAction SilentlyContinue
+    if ($null -ne $gitCommand -and -not [string]::IsNullOrWhiteSpace($gitCommand.Source)) {
+        Add-GitAncestorCandidates $gitCommand.Source
+
+        try {
+            $execPath = (& $gitCommand.Source --exec-path 2>$null | Select-Object -First 1)
+            Add-GitAncestorCandidates ([string]$execPath)
+        }
+        catch {
+            # Best effort only; git's executable path already provides candidates.
+        }
+    }
+
+    foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramW6432, $env:LOCALAPPDATA)) {
+        if (-not [string]::IsNullOrWhiteSpace($base)) {
+            Add-GitRootCandidate (Join-Path $base "Git")
+        }
+    }
+
+    return $roots.ToArray()
 }
 
 function Assert-SupplyChainBuildPrerequisites {

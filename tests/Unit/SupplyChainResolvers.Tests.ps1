@@ -306,6 +306,35 @@ Describe "Supply-chain resolvers" {
         $result | Should -Be "/c/repo/dist/cache/node-release-keys/gpg"
     }
 
+    It "finds Git-bundled gpg from a custom Git install root" {
+        $gitRoot = Join-Path $script:testRoot "custom-git"
+        $gitCmd = Join-Path $gitRoot "cmd\git.exe"
+        $gpgPath = Join-Path $gitRoot "usr\bin\gpg.exe"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $gitCmd) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Split-Path -Parent $gpgPath) -Force | Out-Null
+        Set-Content -LiteralPath $gitCmd -Value "fake git" -NoNewline
+        Set-Content -LiteralPath $gpgPath -Value "fake gpg" -NoNewline
+
+        $result = & (Get-Module CodexWoA.Build) {
+            param($GitPath)
+            function Get-Command {
+                param($Name)
+                if ($Name -eq "git") {
+                    return [pscustomobject]@{
+                        Source = $GitPath
+                        CommandType = "Application"
+                    }
+                }
+
+                return $null
+            }
+
+            Get-GpgCommandPath
+        } $gitCmd
+
+        $result | Should -Be $gpgPath
+    }
+
     It "checks Node signature verification tools during preflight" {
         $result = & (Get-Module CodexWoA.Build) {
             $script:Context = [pscustomobject]@{
