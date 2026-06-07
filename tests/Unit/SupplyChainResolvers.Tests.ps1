@@ -257,6 +257,80 @@ Describe "Supply-chain resolvers" {
         $result.Original | Should -Be "original"
     }
 
+    It "refreshes cached WSL payload files from verified release assets" {
+        $cacheDir = Join-Path $script:testRoot "cache"
+        $payloadDir = Join-Path $cacheDir "codex-wsl-aarch64-v1.2.3"
+        New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $payloadDir "codex") -Value "poisoned codex" -NoNewline
+        Set-Content -LiteralPath (Join-Path $payloadDir "bwrap") -Value "poisoned bwrap" -NoNewline
+        $release = [pscustomobject]@{
+            tag_name = "v1.2.3"
+            assets = @()
+        }
+
+        $result = & (Get-Module CodexWoA.Build) {
+            param($Release, $CacheDir)
+            $script:verifiedAssets = New-Object System.Collections.Generic.List[string]
+            $script:expandedArchives = New-Object System.Collections.Generic.List[string]
+
+            function Download-VerifiedGitHubReleaseAsset {
+                param(
+                    $Release,
+                    $Owner,
+                    $Repo,
+                    $AssetName,
+                    $Destination,
+                    $AssetNamePattern,
+                    $Label
+                )
+
+                $script:verifiedAssets.Add($AssetName) | Out-Null
+                Set-Content -LiteralPath $Destination -Value "verified $AssetName" -NoNewline
+                return $Destination
+            }
+
+            function Expand-TarGzClean {
+                param($ArchivePath, $Destination)
+                $script:expandedArchives.Add((Split-Path -Leaf $ArchivePath)) | Out-Null
+                New-CleanDirectory $Destination | Out-Null
+                $archiveName = Split-Path -Leaf $ArchivePath
+                $expectedName = if ($archiveName -like "codex-*") {
+                    "codex-aarch64-unknown-linux-musl"
+                }
+                else {
+                    "bwrap-aarch64-unknown-linux-musl"
+                }
+                Set-Content -LiteralPath (Join-Path $Destination $expectedName) -Value "trusted $expectedName" -NoNewline
+            }
+
+            function Get-ElfMachine {
+                param($Path)
+                "arm64"
+            }
+
+            $payload = Get-Arm64WslCodexPayload `
+                -Release $Release `
+                -Owner "openai" `
+                -Repo "codex" `
+                -AssetNamePattern ".*" `
+                -CacheDir $CacheDir
+
+            [pscustomobject]@{
+                Codex = Get-Content -LiteralPath $payload.CodexPath -Raw
+                Bwrap = Get-Content -LiteralPath $payload.BwrapPath -Raw
+                VerifiedAssets = $script:verifiedAssets.ToArray()
+                ExpandedArchives = $script:expandedArchives.ToArray()
+            }
+        } $release $cacheDir
+
+        $result.Codex | Should -Be "trusted codex-aarch64-unknown-linux-musl"
+        $result.Bwrap | Should -Be "trusted bwrap-aarch64-unknown-linux-musl"
+        $result.VerifiedAssets | Should -Contain "codex-aarch64-unknown-linux-musl.tar.gz"
+        $result.VerifiedAssets | Should -Contain "bwrap-aarch64-unknown-linux-musl.tar.gz"
+        $result.ExpandedArchives | Should -Contain "codex-aarch64-unknown-linux-musl.tar.gz"
+        $result.ExpandedArchives | Should -Contain "bwrap-aarch64-unknown-linux-musl.tar.gz"
+    }
+
     It "extracts and verifies a Node release checksum" {
         $cacheDir = Join-Path $script:testRoot "cache"
         New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null

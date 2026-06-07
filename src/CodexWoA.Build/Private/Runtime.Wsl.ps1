@@ -33,32 +33,29 @@ function Get-Arm64WslCodexPayload {
     $codexPath = Join-Path $payloadCacheDir "codex"
     $bwrapPath = Join-Path $payloadCacheDir "bwrap"
 
-    if (-not (Test-Path -LiteralPath $codexPath) -or -not (Test-Path -LiteralPath $bwrapPath)) {
-        New-CleanDirectory $payloadCacheDir | Out-Null
+    New-Item -ItemType Directory -Path $payloadCacheDir -Force | Out-Null
+    $assets = @(
+        @{ asset = "codex-aarch64-unknown-linux-musl.tar.gz"; expected = "codex-aarch64-unknown-linux-musl"; target = $codexPath },
+        @{ asset = "bwrap-aarch64-unknown-linux-musl.tar.gz"; expected = "bwrap-aarch64-unknown-linux-musl"; target = $bwrapPath }
+    )
 
-        $assets = @(
-            @{ asset = "codex-aarch64-unknown-linux-musl.tar.gz"; expected = "codex-aarch64-unknown-linux-musl"; target = $codexPath },
-            @{ asset = "bwrap-aarch64-unknown-linux-musl.tar.gz"; expected = "bwrap-aarch64-unknown-linux-musl"; target = $bwrapPath }
-        )
+    foreach ($item in $assets) {
+        $archivePath = Join-Path $payloadCacheDir $item.asset
+        Download-VerifiedGitHubReleaseAsset `
+            -Release $Release `
+            -Owner $Owner `
+            -Repo $Repo `
+            -AssetName $item.asset `
+            -Destination $archivePath `
+            -AssetNamePattern $AssetNamePattern `
+            -Label $item.expected | Out-Null
 
-        foreach ($item in $assets) {
-            $archivePath = Join-Path $payloadCacheDir $item.asset
-            Download-VerifiedGitHubReleaseAsset `
-                -Release $Release `
-                -Owner $Owner `
-                -Repo $Repo `
-                -AssetName $item.asset `
-                -Destination $archivePath `
-                -AssetNamePattern $AssetNamePattern `
-                -Label $item.expected | Out-Null
+        $extractDirName = ($item.asset -replace "[^A-Za-z0-9_.-]", "_") -replace "\.tar\.gz$", ""
+        $extractDir = Join-Path $payloadCacheDir $extractDirName
+        Expand-TarGzClean $archivePath $extractDir | Out-Null
 
-            $extractDirName = ($item.asset -replace "[^A-Za-z0-9_.-]", "_") -replace "\.tar\.gz$", ""
-            $extractDir = Join-Path $payloadCacheDir $extractDirName
-            Expand-TarGzClean $archivePath $extractDir | Out-Null
-
-            $sourcePath = Get-ExtractedSingleFile $extractDir $item.expected
-            Copy-Item -LiteralPath $sourcePath -Destination $item.target -Force
-        }
+        $sourcePath = Get-ExtractedSingleFile $extractDir $item.expected
+        Copy-Item -LiteralPath $sourcePath -Destination $item.target -Force
     }
 
     foreach ($path in @($codexPath, $bwrapPath)) {
