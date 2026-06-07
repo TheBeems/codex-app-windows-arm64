@@ -21,9 +21,9 @@ OpenAI, Codex, and ChatGPT are trademarks of OpenAI. All other trademarks are th
 - The official Codex app installed from Microsoft Store as the x64 package, or an official x64 Codex MSIX downloaded from Microsoft Store CDN.
 - PowerShell 7 (`pwsh`) is recommended. Windows PowerShell is used only as a fallback.
 - Node.js with `node` and `pnpm` available on `PATH`.
-- Git and GPG for supply-chain verification. Git for Windows satisfies both
-  requirements because the build can discover Git's bundled `usr\bin\gpg.exe`
-  even when `gpg` is not on `PATH`.
+- GPG for supply-chain verification. Git for Windows satisfies this requirement
+  because the build can discover Git's bundled `usr\bin\gpg.exe` even when
+  `gpg` is not on `PATH`.
 - Windows SDK tools, including `makeappx.exe`, `signtool.exe`, and `mt.exe`.
 - `tar.exe` available on `PATH` for extracting upstream Linux ARM64 runtime assets.
 - Visual Studio C++ desktop build tools with the ARM64 C++ toolchain.
@@ -84,9 +84,10 @@ Build-CodexWoA.bat -SourceMode StoreMsix -Force
 The default output directory is `dist`.
 
 Node.js release verification requires GPG. During preflight the build checks for
-`git` and `gpg` before downloading Node assets. The Node zip is verified against
-the hash in Node's signed `SHASUMS256.txt.asc`; a build machine without GPG will
-fail before the transform phase.
+`gpg` before downloading Node assets. The Node zip is verified against the hash
+in Node's signed `SHASUMS256.txt.asc` using the vendored Node release public
+keyring under `src\CodexWoA.Build\Data\NodeReleaseKeys`; a build machine without
+GPG will fail before the transform phase.
 
 ### Development
 

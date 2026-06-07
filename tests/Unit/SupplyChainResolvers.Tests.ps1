@@ -221,9 +221,7 @@ Describe "Supply-chain resolvers" {
                     Node = @{
                         ChecksumsFile = "SHASUMS256.txt.asc"
                         RequireSignedChecksums = $true
-                        ReleaseKeysRepo = "https://example.test/nodejs/release-keys.git"
-                        ReleaseKeysRef = "main"
-                        ReleaseKeysGpgDirectory = "gpg"
+                        ReleaseKeysDirectory = "C:\fake\node-release-keys"
                     }
                 }
             }
@@ -251,13 +249,11 @@ Describe "Supply-chain resolvers" {
                 $script:Context = [pscustomobject]@{
                     SupplyChainPolicy = @{
                         Node = @{
-                            ChecksumsFile = "SHASUMS256.txt.asc"
-                            RequireSignedChecksums = $true
-                            ReleaseKeysRepo = "https://example.test/nodejs/release-keys.git"
-                            ReleaseKeysRef = "main"
-                            ReleaseKeysGpgDirectory = "gpg"
-                        }
+                        ChecksumsFile = "SHASUMS256.txt.asc"
+                        RequireSignedChecksums = $true
+                        ReleaseKeysDirectory = "C:\fake\node-release-keys"
                     }
+                }
                 }
                 function Assert-NodeChecksumsSignature {
                     param($ChecksumsPath, $NodePolicy, $CacheDir)
@@ -282,13 +278,11 @@ Describe "Supply-chain resolvers" {
                 $script:Context = [pscustomobject]@{
                     SupplyChainPolicy = @{
                         Node = @{
-                            ChecksumsFile = "SHASUMS256.txt.asc"
-                            RequireSignedChecksums = $true
-                            ReleaseKeysRepo = "https://example.test/nodejs/release-keys.git"
-                            ReleaseKeysRef = "main"
-                            ReleaseKeysGpgDirectory = "gpg"
-                        }
+                        ChecksumsFile = "SHASUMS256.txt.asc"
+                        RequireSignedChecksums = $true
+                        ReleaseKeysDirectory = "C:\fake\node-release-keys"
                     }
+                }
                 }
                 function Assert-NodeChecksumsSignature {
                     throw "signature verification failed"
@@ -335,6 +329,73 @@ Describe "Supply-chain resolvers" {
         $result | Should -Be $gpgPath
     }
 
+    It "imports vendored Node public keys into a temporary GPG home" {
+        $cacheDir = Join-Path $script:testRoot "cache"
+        $keyDir = Join-Path $script:testRoot "keys"
+        New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $keyDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $keyDir "test.asc") -Value "public key" -NoNewline
+        $checksumsPath = Join-Path $cacheDir "SHASUMS256.txt.asc"
+        Set-Content -LiteralPath $checksumsPath -Value "signed checksums" -NoNewline
+
+        $result = & (Get-Module CodexWoA.Build) {
+            param($KeyDir, $CacheDir, $ChecksumsPath)
+            $script:Context = [pscustomobject]@{
+                Report = [ordered]@{
+                    tools = [ordered]@{}
+                }
+            }
+            $script:commands = New-Object System.Collections.Generic.List[object]
+            function Get-GpgCommandPath {
+                "C:\Program Files\Git\usr\bin\gpg.exe"
+            }
+            function Invoke-Checked {
+                param($FilePath, $Arguments)
+                $script:commands.Add([pscustomobject]@{
+                    FilePath = $FilePath
+                    Arguments = @($Arguments)
+                }) | Out-Null
+                return 0
+            }
+
+            Assert-NodeChecksumsSignature `
+                -ChecksumsPath $ChecksumsPath `
+                -NodePolicy @{ RequireSignedChecksums = $true; ReleaseKeysDirectory = $KeyDir } `
+                -CacheDir $CacheDir
+
+            [pscustomobject]@{
+                Commands = $script:commands.ToArray()
+                Evidence = $script:Context.Report["tools"]["nodeReleaseKeys"]
+            }
+        } $keyDir $cacheDir $checksumsPath
+
+        $result.Commands.Count | Should -Be 2
+        $result.Commands[0].Arguments | Should -Contain "--import"
+        $result.Commands[0].Arguments -join " " | Should -Match "test\.asc"
+        $result.Commands[1].Arguments | Should -Contain "--verify"
+        $result.Evidence | Should -Be (Resolve-Path -LiteralPath $keyDir).Path
+    }
+
+    It "fails closed when the vendored Node keyring is missing" {
+        {
+            & (Get-Module CodexWoA.Build) {
+                Get-NodeReleaseKeysDirectory @{ ReleaseKeysDirectory = "C:\does-not-exist\node-release-keys" }
+            }
+        } | Should -Throw "*was not found*"
+    }
+
+    It "fails closed when the vendored Node keyring contains no public keys" {
+        $keyDir = Join-Path $script:testRoot "empty-keys"
+        New-Item -ItemType Directory -Path $keyDir -Force | Out-Null
+
+        {
+            & (Get-Module CodexWoA.Build) {
+                param($KeyDir)
+                Get-NodeReleaseKeysDirectory @{ ReleaseKeysDirectory = $KeyDir }
+            } $keyDir
+        } | Should -Throw "*does not contain public keys*"
+    }
+
     It "checks Node signature verification tools during preflight" {
         $result = & (Get-Module CodexWoA.Build) {
             $script:Context = [pscustomobject]@{
@@ -349,7 +410,7 @@ Describe "Supply-chain resolvers" {
             }
             function Require-CommandPath {
                 param($Name)
-                "C:\tools\$Name.exe"
+                throw "git should not be required"
             }
             function Get-GpgCommandPath {
                 "C:\Program Files\Git\usr\bin\gpg.exe"
@@ -359,8 +420,8 @@ Describe "Supply-chain resolvers" {
             $script:Context.Report.tools
         }
 
-        $result.git | Should -Be "C:\tools\git.exe"
         $result.gpg | Should -Be "C:\Program Files\Git\usr\bin\gpg.exe"
+        $result.Contains("git") | Should -BeFalse
     }
 
     It "fails preflight when Node signatures are required but gpg is unavailable" {

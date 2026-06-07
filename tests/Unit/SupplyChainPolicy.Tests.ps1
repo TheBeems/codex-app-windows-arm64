@@ -34,10 +34,14 @@ Describe "Supply-chain policy" {
     It "declares signed Node upstream checksum verification" {
         $policy.Node.ChecksumsFile | Should -Be "SHASUMS256.txt.asc"
         $policy.Node.RequireSignedChecksums | Should -BeTrue
-        $policy.Node.ReleaseKeysRepo | Should -Be "https://github.com/nodejs/release-keys.git"
-        $policy.Node.ReleaseKeysRef | Should -Not -BeNullOrEmpty
-        $policy.Node.ReleaseKeysGpgDirectory | Should -Be "gpg"
+        $policy.Node.ReleaseKeysDirectory | Should -Be "Data\NodeReleaseKeys\keys"
+        $policy.Node.ContainsKey("ReleaseKeysRepo") | Should -BeFalse
+        $policy.Node.ContainsKey("ReleaseKeysRef") | Should -BeFalse
         $policy.Node.ContainsKey("PinnedAssetHashes") | Should -BeFalse
+
+        $keyRoot = Join-Path $repoRoot "src\CodexWoA.Build\Data\NodeReleaseKeys"
+        Test-Path -LiteralPath (Join-Path $keyRoot "UPSTREAM.txt") | Should -BeTrue
+        @(Get-ChildItem -LiteralPath (Join-Path $keyRoot "keys") -File -Filter "*.asc").Count | Should -BeGreaterThan 0
     }
 
     It "keeps rcedit as an explicit direct-download pin because upstream publishes no signed checksum" {
@@ -48,11 +52,12 @@ Describe "Supply-chain policy" {
         $policy.DirectDownloads.Rcedit.Sha256 | Should -Match "^[A-F0-9]{64}$"
     }
 
-    It "documents Git and GPG as build requirements for Node signature verification" {
+    It "documents GPG and the vendored Node keyring as build requirements for Node signature verification" {
         $readme = Get-Content -LiteralPath (Join-Path $repoRoot "README.md") -Raw
-        $readme | Should -Match "Git and GPG"
+        $readme | Should -Match "GPG"
+        $readme | Should -Match "vendored Node release public"
         $readme | Should -Match "SHASUMS256\.txt\.asc"
-        $readme | Should -Match "gpg"
+        $readme | Should -Not -Match 'checks for\s*`git`'
     }
 
     It "keeps workflow Store source checks sourced from supply-chain policy" {
@@ -61,6 +66,7 @@ Describe "Supply-chain policy" {
         $workflow | Should -Match '\$storePolicy\.AllowedUrlHosts'
         $workflow | Should -Match '\$storePolicy\.ExpectedPublisher'
         $workflow | Should -Match '\$storePolicy\.RequiredSignerIssuerContains'
+        $workflow | Should -Match '\$signature\.Status -ne "Valid"'
         $workflow | Should -Not -Match "tlu\.dl\.delivery\.mp\.microsoft\.com"
         $workflow | Should -Not -Match "50BDFD77-8903-4850-9FFE-6E8522F64D5B"
         $workflow | Should -Not -Match "Microsoft Marketplace CA"

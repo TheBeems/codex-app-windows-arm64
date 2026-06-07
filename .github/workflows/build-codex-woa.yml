@@ -136,6 +136,12 @@ jobs:
           }
 
           $signature = Get-AuthenticodeSignature -LiteralPath $sourceMsix
+          if ($null -eq $signature.SignerCertificate) {
+            throw "Source MSIX does not contain an Authenticode signer: $sourceMsix"
+          }
+          if ($signature.Status -ne "Valid") {
+            throw "Source MSIX Authenticode signature is $($signature.Status), expected Valid: $sourceMsix"
+          }
           if ($signature.SignerCertificate.Subject -ne $storePolicy.ExpectedPublisher) {
             throw "Unexpected source MSIX signer: $($signature.SignerCertificate.Subject)"
           }

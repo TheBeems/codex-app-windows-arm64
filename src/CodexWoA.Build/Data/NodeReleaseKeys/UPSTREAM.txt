@@ -1,0 +1,13 @@
+Source: https://github.com/nodejs/release-keys
+Commit: 7b6eb2d6ab524bb30487f31612cdbeb35ae37533
+Commit date: 2026-03-10 19:34:54 +0100
+Commit subject: update key for aduh95 (#51)
+
+Vendored content:
+- keys/*.asc
+
+Refresh instructions:
+1. Inspect the upstream Node.js release-keys repository and choose a specific commit.
+2. Copy the public key files from upstream keys/*.asc into this directory's keys folder.
+3. Update this file with the upstream commit metadata.
+4. Run .\tests\Run-Checks.ps1 from the repository root.

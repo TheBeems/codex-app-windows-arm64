@@ -42,8 +42,6 @@
     Node = @{
         ChecksumsFile = "SHASUMS256.txt.asc"
         RequireSignedChecksums = $true
-        ReleaseKeysRepo = "https://github.com/nodejs/release-keys.git"
-        ReleaseKeysRef = "main"
-        ReleaseKeysGpgDirectory = "gpg"
+        ReleaseKeysDirectory = "Data\NodeReleaseKeys\keys"
     }
 }

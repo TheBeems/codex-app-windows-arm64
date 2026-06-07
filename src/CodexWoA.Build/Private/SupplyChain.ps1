@@ -307,9 +307,7 @@ function Assert-SupplyChainBuildPrerequisites {
     }
 
     Write-Step "Checking supply-chain signature verification tools"
-    $git = Require-CommandPath "git"
     $gpg = Get-GpgCommandPath
-    $script:Context.Report.tools.git = $git
     $script:Context.Report.tools.gpg = $gpg
 }
 
@@ -327,51 +325,71 @@ function ConvertTo-GpgPath {
     return $fullPath
 }
 
-function Get-NodeReleaseKeyringDirectory {
+function Get-NodeReleaseKeysDirectory {
     param(
-        [object]$NodePolicy,
-        [string]$CacheDir
+        [object]$NodePolicy
     )
 
-    if ([string]::IsNullOrWhiteSpace([string]$NodePolicy.ReleaseKeysRepo)) {
-        throw "Node release keyring policy is missing ReleaseKeysRepo."
-    }
-    if ([string]::IsNullOrWhiteSpace([string]$NodePolicy.ReleaseKeysRef)) {
-        throw "Node release keyring policy is missing ReleaseKeysRef."
-    }
-    if ([string]::IsNullOrWhiteSpace([string]$NodePolicy.ReleaseKeysGpgDirectory)) {
-        throw "Node release keyring policy is missing ReleaseKeysGpgDirectory."
+    if ([string]::IsNullOrWhiteSpace([string]$NodePolicy.ReleaseKeysDirectory)) {
+        throw "Node release keyring policy is missing ReleaseKeysDirectory."
     }
 
-    $git = Require-CommandPath "git"
-    $keysRoot = Join-Path $CacheDir "node-release-keys"
-    if (-not (Test-Path -LiteralPath (Join-Path $keysRoot ".git"))) {
-        Remove-IfExists $keysRoot
-        Invoke-Checked $git @(
-            "clone",
-            "--depth", "1",
-            "--branch", [string]$NodePolicy.ReleaseKeysRef,
-            [string]$NodePolicy.ReleaseKeysRepo,
-            $keysRoot
-        ) | Out-Null
+    $keysDirectory = [string]$NodePolicy.ReleaseKeysDirectory
+    if (-not [System.IO.Path]::IsPathRooted($keysDirectory)) {
+        $keysDirectory = Join-Path $script:ModuleRoot $keysDirectory
     }
-    else {
-        Push-Location $keysRoot
-        try {
-            Invoke-Checked $git @("fetch", "--depth", "1", "origin", [string]$NodePolicy.ReleaseKeysRef) | Out-Null
-            Invoke-Checked $git @("checkout", "--detach", "FETCH_HEAD") | Out-Null
+
+    if (-not (Test-Path -LiteralPath $keysDirectory)) {
+        throw "Node release keyring directory was not found: $keysDirectory"
+    }
+
+    $keyFiles = @(Get-ChildItem -LiteralPath $keysDirectory -File -Filter "*.asc" -ErrorAction SilentlyContinue)
+    if ($keyFiles.Count -eq 0) {
+        throw "Node release keyring directory does not contain public keys: $keysDirectory"
+    }
+
+    return (Resolve-Path -LiteralPath $keysDirectory).Path
+}
+
+function New-NodeReleaseGpgHome {
+    param(
+        [object]$NodePolicy,
+        [string]$CacheDir,
+        [string]$GpgPath
+    )
+
+    $keysDirectory = Get-NodeReleaseKeysDirectory $NodePolicy
+    $keyFiles = @(Get-ChildItem -LiteralPath $keysDirectory -File -Filter "*.asc" | Sort-Object Name)
+    $gpgHome = Join-Path $CacheDir "node-release-keyring"
+    New-CleanDirectoryUnderRoot $gpgHome $CacheDir | Out-Null
+
+    $importPaths = @($keyFiles | ForEach-Object { ConvertTo-GpgPath $_.FullName $GpgPath })
+    Invoke-Checked $GpgPath (@(
+        "--homedir", (ConvertTo-GpgPath $gpgHome $GpgPath),
+        "--import"
+    ) + $importPaths) | Out-Null
+
+    $contextVariable = Get-Variable -Name Context -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $contextVariable -and $null -ne $contextVariable.Value) {
+        $reportProperty = $contextVariable.Value.PSObject.Properties["Report"]
+        if ($null -ne $reportProperty -and $null -ne $reportProperty.Value) {
+            $report = $reportProperty.Value
+            $tools = if ($report -is [System.Collections.IDictionary]) {
+                $report["tools"]
+            }
+            else {
+                $report.tools
+            }
+            if ($tools -is [System.Collections.IDictionary]) {
+                $tools["nodeReleaseKeys"] = $keysDirectory
+            }
+            else {
+                $tools.nodeReleaseKeys = $keysDirectory
+            }
         }
-        finally {
-            Pop-Location
-        }
     }
 
-    $gpgDir = Join-Path $keysRoot ([string]$NodePolicy.ReleaseKeysGpgDirectory)
-    if (-not (Test-Path -LiteralPath $gpgDir)) {
-        throw "Node release keyring directory was not found: $gpgDir"
-    }
-
-    return $gpgDir
+    return $gpgHome
 }
 
 function Assert-NodeChecksumsSignature {
@@ -386,7 +404,7 @@ function Assert-NodeChecksumsSignature {
     }
 
     $gpg = Get-GpgCommandPath
-    $keyringDir = Get-NodeReleaseKeyringDirectory $NodePolicy $CacheDir
+    $keyringDir = New-NodeReleaseGpgHome $NodePolicy $CacheDir $gpg
     Invoke-Checked $gpg @(
         "--homedir", (ConvertTo-GpgPath $keyringDir $gpg),
         "--verify", (ConvertTo-GpgPath $ChecksumsPath $gpg)

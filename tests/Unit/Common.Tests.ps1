@@ -89,4 +89,28 @@ Describe "Common build helpers" {
             } $batPath
         } | Should -Throw "*exit code 7*stdout-line*stderr-line*"
     }
+
+    It "caps command evidence output lines" {
+        $batPath = Join-Path $script:testRoot "long-output.bat"
+        $longLine = "x" * 2500
+        Set-Content -LiteralPath $batPath -Value @(
+            "@echo off",
+            "echo $longLine",
+            "exit /b 0"
+        )
+
+        $result = & (Get-Module CodexWoA.Build) {
+            param($Path)
+            $script:Context = [pscustomobject]@{
+                Report = [ordered]@{
+                    commandEvidence = New-Object System.Collections.Generic.List[object]
+                }
+            }
+            Invoke-Checked $Path @() | Out-Null
+            $script:Context.Report.commandEvidence[0].outputTail[0]
+        } $batPath
+
+        $result.Length | Should -BeLessOrEqual 2014
+        $result | Should -Match "\[truncated\]$"
+    }
 }

@@ -131,6 +131,21 @@ function Format-CommandForLog {
     return ($parts -join " ")
 }
 
+function Limit-CommandOutputLine {
+    param(
+        [AllowNull()]
+        [object]$Value,
+        [int]$MaxLength = 2000
+    )
+
+    $line = [string]$Value
+    if ($line.Length -le $MaxLength) {
+        return $line
+    }
+
+    return $line.Substring(0, $MaxLength) + "...[truncated]"
+}
+
 function Invoke-Checked {
     param(
         [string]$FilePath,
@@ -151,7 +166,7 @@ function Invoke-Checked {
         command = $commandLine
         workingDirectory = $workingDirectory
         exitCode = $exitCode
-        outputTail = @($output | Select-Object -Last 20 | ForEach-Object { [string]$_ })
+        outputTail = @($output | Select-Object -Last 20 | ForEach-Object { Limit-CommandOutputLine $_ })
     }
 
     if ($SuccessExitCodes -notcontains $exitCode) {
@@ -182,7 +197,7 @@ function Copy-DirectoryRobust {
         command = "robocopy"
         workingDirectory = $workingDirectory
         exitCode = $exitCode
-        outputTail = @($output | Select-Object -Last 20 | ForEach-Object { [string]$_ })
+        outputTail = @($output | Select-Object -Last 20 | ForEach-Object { Limit-CommandOutputLine $_ })
     }
 
     if ($exitCode -gt 7) {
@@ -431,7 +446,6 @@ function Invoke-ControlledExtraction {
         Remove-IfExists $temp
     }
 }
-
 
 
 

@@ -24,9 +24,9 @@ implementation files.
 Supply-chain policy belongs in `Data\SupplyChainPolicy.psd1`. Prefer upstream
 provenance over hardcoded asset hashes: GitHub release assets must expose a
 SHA-256 `digest`, and Node downloads must be verified through Node's signed
-`SHASUMS256.txt.asc` with the Node release GPG keyring. Direct download hash pins
-are reserved for assets where upstream does not publish a signed checksum,
-signature, or GitHub release digest.
+`SHASUMS256.txt.asc` with the vendored Node release public keyring under
+`Data\NodeReleaseKeys`. Direct download hash pins are reserved for assets where
+upstream does not publish a signed checksum, signature, or GitHub release digest.
 
 Run `tests\Run-Checks.ps1` before every commit. Add focused tests beside a domain
 change; avoid abstractions that only serve one caller.
