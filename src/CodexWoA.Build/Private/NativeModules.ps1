@@ -203,7 +203,8 @@ function Assert-NativeBuildMetadataSafe {
         [string]$Label
     )
 
-    $gypFiles = @(Get-ChildItem -LiteralPath $PackageDir -Recurse -File -Filter "*.gyp" -ErrorAction SilentlyContinue)
+    $gypFiles = @(Get-ChildItem -LiteralPath $PackageDir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in @(".gyp", ".gypi") })
     foreach ($gypFile in $gypFiles) {
         $content = Get-Content -LiteralPath $gypFile.FullName -Raw
         if ($content -match "(?m)['""]?(actions|rules)['""]?\s*:") {
