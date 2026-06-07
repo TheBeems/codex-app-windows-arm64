@@ -90,6 +90,35 @@ Describe "Common build helpers" {
         } | Should -Throw "*exit code 7*stdout-line*stderr-line*"
     }
 
+    It "does not fail successful native commands that write to stderr under stop preference" {
+        $batPath = Join-Path $script:testRoot "stderr-success.bat"
+        Set-Content -LiteralPath $batPath -Value @(
+            "@echo off",
+            "echo stdout-line",
+            "echo stderr-line 1>&2",
+            "exit /b 0"
+        )
+
+        $result = & (Get-Module CodexWoA.Build) {
+            param($Path)
+            $script:Context = [pscustomobject]@{
+                Report = [ordered]@{
+                    commandEvidence = New-Object System.Collections.Generic.List[object]
+                }
+            }
+            $ErrorActionPreference = "Stop"
+            $exitCode = Invoke-Checked $Path @()
+            [pscustomobject]@{
+                ExitCode = $exitCode
+                OutputTail = @($script:Context.Report.commandEvidence[0].outputTail)
+            }
+        } $batPath
+
+        $result.ExitCode | Should -Be 0
+        $result.OutputTail -join "`n" | Should -Match "stdout-line"
+        $result.OutputTail -join "`n" | Should -Match "stderr-line"
+    }
+
     It "caps command evidence output lines" {
         $batPath = Join-Path $script:testRoot "long-output.bat"
         $longLine = "x" * 2500

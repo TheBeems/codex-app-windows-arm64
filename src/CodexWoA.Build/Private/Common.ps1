@@ -177,8 +177,15 @@ function Invoke-Checked {
     $workingDirectory = (Get-Location).Path
     $commandLine = Format-CommandForLog $FilePath $Arguments
     Write-Verbose ("Running: {0}" -f $commandLine)
-    $output = @(& $FilePath @Arguments 2>&1)
-    $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& $FilePath @Arguments 2>&1)
+        $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     foreach ($line in $output) {
         $line | Out-Host
     }
@@ -467,7 +474,6 @@ function Invoke-ControlledExtraction {
         Remove-IfExists $temp
     }
 }
-
 
 
 
