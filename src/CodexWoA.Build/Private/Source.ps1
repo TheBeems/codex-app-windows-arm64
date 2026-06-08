@@ -57,17 +57,87 @@ function ConvertFrom-CodexStoreHtml {
 
     return $storeMatches |
         ForEach-Object {
+            $file = [System.Net.WebUtility]::HtmlDecode($_.Groups["file"].Value)
+            $url = [System.Net.WebUtility]::HtmlDecode($_.Groups["href"].Value)
+            $expire = [System.Net.WebUtility]::HtmlDecode($_.Groups["expire"].Value)
+            $size = [System.Net.WebUtility]::HtmlDecode($_.Groups["size"].Value)
+
+            Assert-SafeScalarValue "Store MSIX file" $file
+            Assert-SafeScalarValue "Store MSIX URL" $url
+            Assert-SafeScalarValue "Store MSIX expiry" $expire
+            Assert-SafeScalarValue "Store MSIX size" $size
+            Assert-AllowedStoreMsixUrl $url
+
             [pscustomobject]@{
                 Version = [version]$_.Groups["version"].Value
-                File = [System.Net.WebUtility]::HtmlDecode($_.Groups["file"].Value)
-                Url = [System.Net.WebUtility]::HtmlDecode($_.Groups["href"].Value)
+                File = $file
+                Url = $url
                 Sha1 = $_.Groups["sha1"].Value.ToUpperInvariant()
-                Expire = [System.Net.WebUtility]::HtmlDecode($_.Groups["expire"].Value)
-                Size = [System.Net.WebUtility]::HtmlDecode($_.Groups["size"].Value)
+                Expire = $expire
+                Size = $size
             }
         } |
         Sort-Object Version -Descending |
         Select-Object -First 1
+}
+
+function Assert-AllowedStoreMsixUrl {
+    param([string]$Url)
+
+    $policy = (Get-SupplyChainPolicy).StoreSource
+    $uri = $null
+    if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$uri)) {
+        throw "Store MSIX URL is not absolute: $Url"
+    }
+
+    if ($uri.Scheme -notin @("http", "https")) {
+        throw "Store MSIX URL must use HTTP(S): $Url"
+    }
+
+    $host = $uri.Host.ToLowerInvariant()
+    $allowed = @($policy.AllowedUrlHosts) | ForEach-Object { $_.ToLowerInvariant() }
+    if ($allowed -notcontains $host) {
+        throw "Store MSIX URL host is not allowlisted: $host"
+    }
+}
+
+function Assert-CodexSourceMsixSignature {
+    param([string]$MsixPath)
+
+    $policy = (Get-SupplyChainPolicy).StoreSource
+    $signature = Get-AuthenticodeSignature -LiteralPath $MsixPath
+    if ($null -eq $signature.SignerCertificate) {
+        throw "Source MSIX does not contain an Authenticode signer: $MsixPath"
+    }
+    if ($signature.Status -ne "Valid") {
+        throw "Source MSIX Authenticode signature is $($signature.Status), expected Valid: $MsixPath"
+    }
+
+    $subject = $signature.SignerCertificate.Subject
+    $issuer = $signature.SignerCertificate.Issuer
+    if ($subject -ne $policy.ExpectedPublisher) {
+        throw "Source MSIX signer subject '$subject' does not match expected publisher '$($policy.ExpectedPublisher)'."
+    }
+
+    if ($issuer -notlike "*$($policy.RequiredSignerIssuerContains)*") {
+        throw "Source MSIX signer issuer '$issuer' does not match required issuer policy '$($policy.RequiredSignerIssuerContains)'."
+    }
+}
+
+function Assert-CodexSourceManifestIdentity {
+    param([xml]$Manifest)
+
+    $policy = (Get-SupplyChainPolicy).StoreSource
+    $identity = $Manifest.Package.Identity
+    if ($identity.Name -ne $policy.ExpectedIdentityName) {
+        throw "MSIX identity mismatch: $($identity.Name). Expected $($policy.ExpectedIdentityName)."
+    }
+    if ($identity.ProcessorArchitecture -ne $policy.ExpectedArchitecture) {
+        throw "MSIX architecture mismatch: $($identity.ProcessorArchitecture). Expected $($policy.ExpectedArchitecture)."
+    }
+    if ($identity.Publisher -ne $policy.ExpectedPublisher) {
+        throw "MSIX publisher mismatch: $($identity.Publisher). Expected $($policy.ExpectedPublisher)."
+    }
 }
 
 function ConvertTo-FourPartVersion {
@@ -254,6 +324,7 @@ function Copy-MsixSource {
     }
 
     $resolvedMsixPath = (Resolve-Path -LiteralPath $MsixPath).Path
+    Assert-CodexSourceMsixSignature $resolvedMsixPath
     Write-Step "Extracting source MSIX $resolvedMsixPath"
     Expand-MsixClean $resolvedMsixPath $Destination
 
@@ -263,13 +334,8 @@ function Copy-MsixSource {
     }
 
     [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
+    Assert-CodexSourceManifestIdentity $manifest
     $identity = $manifest.Package.Identity
-    if ($identity.Name -ne "OpenAI.Codex") {
-        throw "MSIX identity mismatch: $($identity.Name). Expected OpenAI.Codex."
-    }
-    if ($identity.ProcessorArchitecture -ne "x64") {
-        throw "MSIX architecture mismatch: $($identity.ProcessorArchitecture). Expected x64."
-    }
 
     $script:Context.Report.source = [ordered]@{
         kind = "Msix"

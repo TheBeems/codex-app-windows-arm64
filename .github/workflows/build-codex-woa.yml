@@ -104,7 +104,8 @@ jobs:
         shell: pwsh
         run: |
           corepack enable
-          corepack prepare pnpm@11.1.3 --activate
+          $tools = Import-PowerShellDataFile -LiteralPath "src\CodexWoA.Build\Data\BuildTools.psd1"
+          corepack prepare "pnpm@$($tools.Pnpm)" --activate
           pnpm --version
 
       - id: download
@@ -120,11 +121,32 @@ jobs:
           New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
           $sourceMsix = Join-Path $sourceDir $env:MSIX_FILE
 
+          $policy = Import-PowerShellDataFile -LiteralPath "src\CodexWoA.Build\Data\SupplyChainPolicy.psd1"
+          $storePolicy = $policy.StoreSource
+          $uri = [uri]$env:MSIX_URL
+          if ($storePolicy.AllowedUrlHosts -notcontains $uri.Host) {
+            throw "Unexpected Store MSIX host: $($uri.Host)"
+          }
+
           Invoke-WebRequest -UseBasicParsing -Uri $env:MSIX_URL -OutFile $sourceMsix
 
           $actualSha1 = (Get-FileHash -Algorithm SHA1 -LiteralPath $sourceMsix).Hash
           if ($actualSha1 -ne $env:MSIX_SHA1) {
             throw "SHA-1 mismatch. Expected $env:MSIX_SHA1 but got $actualSha1."
+          }
+
+          $signature = Get-AuthenticodeSignature -LiteralPath $sourceMsix
+          if ($null -eq $signature.SignerCertificate) {
+            throw "Source MSIX does not contain an Authenticode signer: $sourceMsix"
+          }
+          if ($signature.Status -ne "Valid") {
+            throw "Source MSIX Authenticode signature is $($signature.Status), expected Valid: $sourceMsix"
+          }
+          if ($signature.SignerCertificate.Subject -ne $storePolicy.ExpectedPublisher) {
+            throw "Unexpected source MSIX signer: $($signature.SignerCertificate.Subject)"
+          }
+          if ($signature.SignerCertificate.Issuer -notlike "*$($storePolicy.RequiredSignerIssuerContains)*") {
+            throw "Unexpected source MSIX signer issuer: $($signature.SignerCertificate.Issuer)"
           }
 
           "source_msix=$sourceMsix" >> $env:GITHUB_OUTPUT

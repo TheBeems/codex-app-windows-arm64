@@ -48,18 +48,10 @@ function New-IcoFromPng {
 function Get-RceditPath {
     param([string]$CacheDir)
 
-    $rceditVersion = "v2.0.0"
-    $rceditName = "rcedit-x64.exe"
+    $rceditPolicy = (Get-SupplyChainPolicy).DirectDownloads.Rcedit
+    $rceditName = [string]$rceditPolicy.AssetName
     $rceditPath = Join-Path $CacheDir $rceditName
-    $expectedHash = "3E7801DB1A5EDBEC91B49A24A094AAD776CB4515488EA5A4CA2289C400EADE2A"
-    if (-not (Test-Path -LiteralPath $rceditPath)) {
-        Download-File "https://github.com/electron/rcedit/releases/download/$rceditVersion/$rceditName" $rceditPath
-    }
-
-    $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $rceditPath).Hash
-    if ($actualHash -ne $expectedHash) {
-        throw "rcedit SHA256 mismatch: $actualHash"
-    }
+    Download-VerifiedDirectDownload "Rcedit" $rceditPath "rcedit" | Out-Null
 
     return $rceditPath
 }
@@ -94,10 +86,15 @@ function Install-Arm64ElectronRuntime {
     Write-Step "Replacing Electron runtime with win32-arm64 v$ElectronVersion"
     $zipName = "electron-v$ElectronVersion-win32-arm64.zip"
     $zipPath = Join-Path $CacheDir $zipName
-    $url = "https://github.com/electron/electron/releases/download/v$ElectronVersion/$zipName"
-    if (-not (Test-Path -LiteralPath $zipPath)) {
-        Download-File $url $zipPath
-    }
+    $releaseInfo = Get-GitHubReleaseFromPolicy "Electron" "v$ElectronVersion" "Electron runtime"
+    Download-VerifiedGitHubReleaseAsset `
+        -Release $releaseInfo.Release `
+        -Owner $releaseInfo.Owner `
+        -Repo $releaseInfo.Repo `
+        -AssetName $zipName `
+        -Destination $zipPath `
+        -AssetNamePattern $releaseInfo.AssetNamePattern `
+        -Label "electron-runtime" | Out-Null
 
     $runtimeDir = Join-Path $CacheDir "electron-win32-arm64-$ElectronVersion"
     Expand-ZipClean $zipPath $runtimeDir
@@ -133,10 +130,7 @@ function Install-Arm64Node {
     Write-Step "Replacing Node.js with win-arm64 v$NodeVersion"
     $zipName = "node-v$NodeVersion-win-arm64.zip"
     $zipPath = Join-Path $CacheDir $zipName
-    $url = "https://nodejs.org/dist/v$NodeVersion/$zipName"
-    if (-not (Test-Path -LiteralPath $zipPath)) {
-        Download-File $url $zipPath
-    }
+    Download-VerifiedNodeReleaseFile $NodeVersion $zipName $zipPath $CacheDir | Out-Null
 
     $nodeDir = Join-Path $CacheDir "node-win-arm64-$NodeVersion"
     Expand-ZipClean $zipPath $nodeDir
@@ -149,40 +143,6 @@ function Install-Arm64Node {
     Add-Replacement "node.exe" "arm64" $zipName
 }
 
-function Get-GitHubRelease {
-    param(
-        [string]$Owner,
-        [string]$Repo,
-        [string]$Tag
-    )
-
-    $headers = @{ Accept = "application/vnd.github+json" }
-    if ($Tag -eq "latest") {
-        return Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/latest" -Headers $headers
-    }
-
-    return Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/tags/$Tag" -Headers $headers
-}
-
-function Download-GitHubReleaseAsset {
-    param(
-        [object]$Release,
-        [string]$AssetName,
-        [string]$Destination
-    )
-
-    $asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
-    if ($null -eq $asset) {
-        throw "Release asset not found: $AssetName"
-    }
-
-    if (-not (Test-Path -LiteralPath $Destination)) {
-        Download-File $asset.browser_download_url $Destination
-    }
-
-    return $Destination
-}
-
 function Install-Arm64CodexHelpers {
     param(
         [string]$ResourcesDir,
@@ -191,7 +151,8 @@ function Install-Arm64CodexHelpers {
     )
 
     Write-Step "Replacing Codex helper executables from openai/codex"
-    $release = Get-GitHubRelease "openai" "codex" $ReleaseTag
+    $releaseInfo = Get-GitHubReleaseFromPolicy "Codex" $ReleaseTag "Codex helper"
+    $release = $releaseInfo.Release
     $script:Context.Report.versions.codexRelease = $release.tag_name
 
     $mapping = @(
@@ -210,7 +171,14 @@ function Install-Arm64CodexHelpers {
 
         try {
             $downloadPath = Join-Path $CacheDir $item.asset
-            Download-GitHubReleaseAsset $release $item.asset $downloadPath | Out-Null
+            Download-VerifiedGitHubReleaseAsset `
+                -Release $release `
+                -Owner $releaseInfo.Owner `
+                -Repo $releaseInfo.Repo `
+                -AssetName $item.asset `
+                -Destination $downloadPath `
+                -AssetNamePattern $releaseInfo.AssetNamePattern `
+                -Label $item.target | Out-Null
             Copy-Item -LiteralPath $downloadPath -Destination $targetPath -Force
             Add-Replacement $item.target "arm64" $item.asset
         }
@@ -218,7 +186,7 @@ function Install-Arm64CodexHelpers {
             if ($item.required) {
                 throw
             }
-            Write-Warn "Could not replace $($item.target); keeping original out-of-process fallback. $($_.Exception.Message)"
+            Write-Warn "Could not verify and replace optional helper $($item.target); keeping original fallback. $($_.Exception.Message)"
             Add-Replacement $item.target "fallback" $_.Exception.Message
         }
     }
@@ -231,11 +199,19 @@ function Install-Arm64Ripgrep {
     )
 
     Write-Step "Replacing rg.exe with ripgrep arm64"
-    $release = Get-GitHubRelease "BurntSushi" "ripgrep" "latest"
+    $releaseInfo = Get-GitHubReleaseFromPolicy "Ripgrep" "latest" "ripgrep"
+    $release = $releaseInfo.Release
     $tag = $release.tag_name.TrimStart("v")
     $assetName = "ripgrep-$tag-aarch64-pc-windows-msvc.zip"
     $zipPath = Join-Path $CacheDir $assetName
-    Download-GitHubReleaseAsset $release $assetName $zipPath | Out-Null
+    Download-VerifiedGitHubReleaseAsset `
+        -Release $release `
+        -Owner $releaseInfo.Owner `
+        -Repo $releaseInfo.Repo `
+        -AssetName $assetName `
+        -Destination $zipPath `
+        -AssetNamePattern $releaseInfo.AssetNamePattern `
+        -Label "rg.exe" | Out-Null
 
     $ripgrepDir = Join-Path $CacheDir "ripgrep-arm64-$tag"
     Expand-ZipClean $zipPath $ripgrepDir
