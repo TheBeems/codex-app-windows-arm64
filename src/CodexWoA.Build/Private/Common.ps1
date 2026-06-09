@@ -5,28 +5,7 @@ function Write-Step {
 
 function Write-Warn {
     param([string]$Message)
-    try {
-        $report = $script:Context.Report
-    }
-    catch {
-        $report = $null
-    }
-
-    if ($null -ne $report) {
-        try {
-            $warnings = $report.warnings
-        }
-        catch {
-            $warnings = $null
-        }
-
-        if ($null -eq $warnings -and $report -is [System.Collections.IDictionary]) {
-            $warnings = $report["warnings"]
-        }
-        if ($null -ne $warnings) {
-            $warnings.Add($Message) | Out-Null
-        }
-    }
+    $script:Context.Report.warnings.Add($Message)
     Write-Warning $Message
 }
 
@@ -58,32 +37,6 @@ function New-CleanDirectory {
     return (Resolve-Path -LiteralPath $Path).Path
 }
 
-function Test-IsPathUnderDirectory {
-    param(
-        [string]$Path,
-        [string]$Directory
-    )
-
-    $pathFull = [System.IO.Path]::GetFullPath($Path)
-    $directoryFull = [System.IO.Path]::GetFullPath($Directory).TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
-    return $pathFull.StartsWith($directoryFull, [System.StringComparison]::OrdinalIgnoreCase)
-}
-
-function New-CleanDirectoryUnderRoot {
-    param(
-        [string]$Path,
-        [string]$Root
-    )
-
-    $rootFull = [System.IO.Path]::GetFullPath($Root)
-    $pathFull = [System.IO.Path]::GetFullPath($Path)
-    if (-not (Test-IsPathUnderDirectory $pathFull $rootFull)) {
-        throw "Refusing to clean generated directory outside expected root. Path: $pathFull Root: $rootFull"
-    }
-
-    return New-CleanDirectory $pathFull
-}
-
 function Set-TextUtf8NoBom {
     param(
         [string]$Path,
@@ -103,70 +56,6 @@ function Require-CommandPath {
     return $command.Source
 }
 
-function Add-CommandEvidence {
-    param([hashtable]$Evidence)
-
-    $contextVariable = Get-Variable -Name Context -Scope Script -ErrorAction SilentlyContinue
-    if ($null -eq $contextVariable -or $null -eq $contextVariable.Value) {
-        return
-    }
-
-    $reportProperty = $contextVariable.Value.PSObject.Properties["Report"]
-    if ($null -eq $reportProperty -or $null -eq $reportProperty.Value) {
-        return
-    }
-
-    $report = $reportProperty.Value
-    if ($report -is [System.Collections.IDictionary]) {
-        $commandEvidence = $report["commandEvidence"]
-    }
-    else {
-        $commandEvidenceProperty = $report.PSObject.Properties["commandEvidence"]
-        $commandEvidence = if ($null -ne $commandEvidenceProperty) { $commandEvidenceProperty.Value } else { $null }
-    }
-
-    if ($null -eq $commandEvidence) {
-        return
-    }
-
-    $commandEvidence.Add($Evidence) | Out-Null
-}
-
-function Format-CommandForLog {
-    param(
-        [string]$FilePath,
-        [string[]]$Arguments
-    )
-
-    $parts = New-Object "System.Collections.Generic.List[string]"
-    $parts.Add($FilePath) | Out-Null
-    foreach ($argument in @($Arguments)) {
-        if ($argument -match "\s") {
-            $parts.Add(('"{0}"' -f ($argument -replace '"', '\"'))) | Out-Null
-        }
-        else {
-            $parts.Add($argument) | Out-Null
-        }
-    }
-
-    return ($parts -join " ")
-}
-
-function Limit-CommandOutputLine {
-    param(
-        [AllowNull()]
-        [object]$Value,
-        [int]$MaxLength = 2000
-    )
-
-    $line = [string]$Value
-    if ($line.Length -le $MaxLength) {
-        return $line
-    }
-
-    return $line.Substring(0, $MaxLength) + "...[truncated]"
-}
-
 function Invoke-Checked {
     param(
         [string]$FilePath,
@@ -174,32 +63,11 @@ function Invoke-Checked {
         [int[]]$SuccessExitCodes = @(0)
     )
 
-    $workingDirectory = (Get-Location).Path
-    $commandLine = Format-CommandForLog $FilePath $Arguments
-    Write-Verbose ("Running: {0}" -f $commandLine)
-    $previousErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        $output = @(& $FilePath @Arguments 2>&1)
-        $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
-    }
-    finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
-    foreach ($line in $output) {
-        $line | Out-Host
-    }
-
-    Add-CommandEvidence @{
-        command = $commandLine
-        workingDirectory = $workingDirectory
-        exitCode = $exitCode
-        outputTail = @($output | Select-Object -Last 20 | ForEach-Object { Limit-CommandOutputLine $_ })
-    }
-
+    Write-Verbose ("Running: {0} {1}" -f $FilePath, ($Arguments -join " "))
+    & $FilePath @Arguments | Out-Host
+    $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
     if ($SuccessExitCodes -notcontains $exitCode) {
-        $tail = @($output | Select-Object -Last 20 | ForEach-Object { [string]$_ }) -join "`n"
-        throw "Command failed with exit code $exitCode in ${workingDirectory}: $commandLine`n$tail"
+        throw "Command failed with exit code $exitCode`: $FilePath $($Arguments -join ' ')"
     }
     return $exitCode
 }
@@ -214,23 +82,10 @@ function Copy-DirectoryRobust {
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     $copyMode = if ($Mode -eq "Mirror") { "/MIR" } else { "/E" }
-    $workingDirectory = (Get-Location).Path
-    $output = @(& robocopy $Source $Destination $copyMode /R:2 /W:1 /NFL /NDL /NJH /NJS /NP 2>&1)
+    & robocopy $Source $Destination $copyMode /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Host
     $exitCode = $LASTEXITCODE
-    foreach ($line in $output) {
-        $line | Out-Host
-    }
-
-    Add-CommandEvidence @{
-        command = "robocopy"
-        workingDirectory = $workingDirectory
-        exitCode = $exitCode
-        outputTail = @($output | Select-Object -Last 20 | ForEach-Object { Limit-CommandOutputLine $_ })
-    }
-
     if ($exitCode -gt 7) {
-        $tail = @($output | Select-Object -Last 20 | ForEach-Object { [string]$_ }) -join "`n"
-        throw "robocopy failed with exit code $exitCode in ${workingDirectory}: $Source -> $Destination`n$tail"
+        throw "robocopy failed with exit code $exitCode"
     }
 }
 
@@ -310,27 +165,28 @@ function Find-WindowsKitTool {
     throw "Could not find Windows SDK tool: $ToolName"
 }
 
+function Download-File {
+    param(
+        [string]$Url,
+        [string]$Destination
+    )
+
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
+    Write-Host "Downloading $Url"
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination
+    if (-not (Test-Path -LiteralPath $Destination) -or (Get-Item -LiteralPath $Destination).Length -eq 0) {
+        throw "Downloaded file is empty: $Destination"
+    }
+}
+
 function Expand-ZipClean {
     param(
         [string]$ZipPath,
         [string]$Destination
     )
 
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
-    try {
-        foreach ($entry in $archive.Entries) {
-            Assert-ArchiveEntryPathSafe $entry.FullName $ZipPath
-        }
-    }
-    finally {
-        $archive.Dispose()
-    }
-
-    Invoke-ControlledExtraction $Destination {
-        param($ExtractDestination)
-        Expand-Archive -LiteralPath $ZipPath -DestinationPath $ExtractDestination -Force
-    } $ZipPath
+    New-CleanDirectory $Destination | Out-Null
+    Expand-Archive -LiteralPath $ZipPath -DestinationPath $Destination -Force
 }
 
 function Expand-MsixClean {
@@ -339,21 +195,9 @@ function Expand-MsixClean {
         [string]$Destination
     )
 
+    New-CleanDirectory $Destination | Out-Null
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $archive = [System.IO.Compression.ZipFile]::OpenRead($MsixPath)
-    try {
-        foreach ($entry in $archive.Entries) {
-            Assert-ArchiveEntryPathSafe $entry.FullName $MsixPath
-        }
-    }
-    finally {
-        $archive.Dispose()
-    }
-
-    Invoke-ControlledExtraction $Destination {
-        param($ExtractDestination)
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($MsixPath, $ExtractDestination)
-    } $MsixPath
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($MsixPath, $Destination)
 }
 
 function Get-TarCommandPath {
@@ -376,20 +220,9 @@ function Expand-TarGzClean {
         [string]$Destination
     )
 
+    New-CleanDirectory $Destination | Out-Null
     $tar = Get-TarCommandPath
-    $listOutput = @(& $tar -tzf $TarGzPath 2>&1)
-    $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
-    if ($exitCode -ne 0) {
-        throw "tar listing failed with exit code $exitCode`: $($listOutput -join "`n")"
-    }
-    foreach ($entry in $listOutput) {
-        Assert-ArchiveEntryPathSafe ([string]$entry) $TarGzPath
-    }
-
-    Invoke-ControlledExtraction $Destination {
-        param($ExtractDestination)
-        Invoke-Checked $tar @("-xzf", $TarGzPath, "-C", $ExtractDestination) | Out-Null
-    } $TarGzPath
+    Invoke-Checked $tar @("-xzf", $TarGzPath, "-C", $Destination)
 }
 
 
@@ -404,76 +237,23 @@ function Get-RelativePath {
 
     $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd("\", "/")
     $pathFull = [System.IO.Path]::GetFullPath($Path)
-    if (-not (Test-IsPathUnderDirectory $pathFull $rootFull)) {
-        throw "Path is not under root. Root: $rootFull Path: $pathFull"
-    }
     return $pathFull.Substring($rootFull.Length + 1).Replace("/", "\")
 }
 
-function Assert-ArchiveEntryPathSafe {
-    param(
-        [string]$EntryName,
-        [string]$ArchivePath
-    )
 
-    if ([string]::IsNullOrWhiteSpace($EntryName)) {
-        return
-    }
 
-    if ($EntryName -match "[\x00-\x1F\x7F]") {
-        throw "Archive entry contains a control character in ${ArchivePath}: $EntryName"
-    }
-    if ([System.IO.Path]::IsPathRooted($EntryName)) {
-        throw "Archive entry uses an absolute path in ${ArchivePath}: $EntryName"
-    }
 
-    $segments = @($EntryName -split "[/\\]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($segments -contains "..") {
-        throw "Archive entry escapes the destination in ${ArchivePath}: $EntryName"
-    }
-}
 
-function Assert-ExtractedTreeSafe {
-    param(
-        [string]$Root,
-        [string]$ArchivePath
-    )
 
-    $rootFull = [System.IO.Path]::GetFullPath($Root)
-    $items = @(Get-ChildItem -LiteralPath $rootFull -Recurse -Force -ErrorAction SilentlyContinue)
-    foreach ($item in $items) {
-        $itemFull = [System.IO.Path]::GetFullPath($item.FullName)
-        if (-not (Test-IsPathUnderDirectory $itemFull $rootFull)) {
-            throw "Archive output escaped the destination in ${ArchivePath}: $itemFull"
-        }
-        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Archive output contains a reparse point in ${ArchivePath}: $itemFull"
-        }
-    }
-}
 
-function Invoke-ControlledExtraction {
-    param(
-        [string]$Destination,
-        [scriptblock]$Extract,
-        [string]$ArchivePath
-    )
 
-    $destinationFull = [System.IO.Path]::GetFullPath($Destination)
-    $parent = Split-Path -Parent $destinationFull
-    New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    $temp = Join-Path $parent (".extract-" + [System.IO.Path]::GetFileName($destinationFull) + "-" + [guid]::NewGuid().ToString("N"))
-    New-CleanDirectoryUnderRoot $temp $parent | Out-Null
-    try {
-        & $Extract $temp
-        Assert-ExtractedTreeSafe $temp $ArchivePath
-        New-CleanDirectoryUnderRoot $destinationFull $parent | Out-Null
-        Copy-DirectoryRobust $temp $destinationFull
-    }
-    finally {
-        Remove-IfExists $temp
-    }
-}
+
+
+
+
+
+
+
 
 
 

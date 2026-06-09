@@ -26,11 +26,4 @@ Describe "Get-CodexStorePackage wrapper" {
             $command.Extent.Text | Should -Match "-$name\s+\`$$name\b"
         }
     }
-
-    It "uses a scalar-safe helper for GitHub outputs" {
-        $scriptText = $script:Ast.Extent.Text
-        $scriptText | Should -Match "function Write-GitHubScalarOutput"
-        $scriptText | Should -Match "\[\\x00-\\x1F\\x7F\]"
-        $scriptText | Should -Not -Match '">>\s*\$env:GITHUB_OUTPUT'
-    }
 }

@@ -12,8 +12,6 @@ function New-BuildContext {
         publisherSubject = $Options.PublisherSubject
         versions = [ordered]@{}
         replacements = New-Object System.Collections.Generic.List[object]
-        supplyChain = New-Object System.Collections.Generic.List[object]
-        commandEvidence = New-Object System.Collections.Generic.List[object]
         warnings = New-Object System.Collections.Generic.List[string]
         validation = [ordered]@{}
         outputs = [ordered]@{}
@@ -21,7 +19,6 @@ function New-BuildContext {
 
     $policyPath = Join-Path $script:ModuleRoot "Data\CompatibilityPolicy.psd1"
     $policy = Import-PowerShellDataFile -LiteralPath $policyPath
-    $supplyChainPolicy = Import-PowerShellDataFile -LiteralPath (Join-Path $script:ModuleRoot "Data\SupplyChainPolicy.psd1")
     $buildTools = Import-PowerShellDataFile -LiteralPath (Join-Path $script:ModuleRoot "Data\BuildTools.psd1")
 
     return [pscustomobject][ordered]@{
@@ -33,7 +30,6 @@ function New-BuildContext {
         }
         Tools = $buildTools
         Policy = $policy
-        SupplyChainPolicy = $supplyChainPolicy
         Report = $report
     }
 }

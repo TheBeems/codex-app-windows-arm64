@@ -69,11 +69,11 @@ function Rebuild-PluginClassicLevelArm64NativeModules {
     $rebuilt = New-Object "System.Collections.Generic.List[string]"
     $classicLevelDirs = @(Get-PluginClassicLevelPackageDirs $ResourcesDir)
     foreach ($classicLevelDir in $classicLevelDirs) {
-        Assert-NativeBuildMetadataSafe $classicLevelDir.FullName "classic-level"
         Push-Location $classicLevelDir.FullName
         try {
-            $nodeGyp = Get-PinnedNodeGypCommand
-            Invoke-Checked $nodeGyp @(
+            Invoke-Checked "pnpm" @(
+                "dlx",
+                "node-gyp@$($script:Context.Tools.NodeGyp)",
                 "rebuild",
                 "--arch=arm64"
             )

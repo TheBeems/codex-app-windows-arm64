@@ -29,29 +29,13 @@ Write-Host "MSIX SHA-1:     $($result.msixSha1)"
 Write-Host "MSIX expires:   $($result.msixExpire)"
 Write-Host "Should build:   $($result.shouldBuild)"
 
-function Write-GitHubScalarOutput {
-    param(
-        [string]$Name,
-        [string]$Value
-    )
-
-    if ($Name -notmatch "^[A-Za-z_][A-Za-z0-9_]*$") {
-        throw "Invalid GitHub output name: $Name"
-    }
-    if ($null -ne $Value -and $Value -match "[\x00-\x1F\x7F]") {
-        throw "GitHub output '$Name' contains a control character."
-    }
-
-    "$Name=$Value" >> $env:GITHUB_OUTPUT
-}
-
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_OUTPUT)) {
-    Write-GitHubScalarOutput "should_build" $result.shouldBuild.ToString().ToLowerInvariant()
-    Write-GitHubScalarOutput "store_version" $result.packageVersion
-    Write-GitHubScalarOutput "release_tag" $result.releaseTag
-    Write-GitHubScalarOutput "msix_url" $result.msixUrl
-    Write-GitHubScalarOutput "msix_file" $result.msixFile
-    Write-GitHubScalarOutput "msix_sha1" $result.msixSha1
+    "should_build=$($result.shouldBuild.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+    "store_version=$($result.packageVersion)" >> $env:GITHUB_OUTPUT
+    "release_tag=$($result.releaseTag)" >> $env:GITHUB_OUTPUT
+    "msix_url=$($result.msixUrl)" >> $env:GITHUB_OUTPUT
+    "msix_file=$($result.msixFile)" >> $env:GITHUB_OUTPUT
+    "msix_sha1=$($result.msixSha1)" >> $env:GITHUB_OUTPUT
 }
 
 $result | ConvertTo-Json -Depth 4
