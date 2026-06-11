@@ -27,16 +27,23 @@ function Read-ElectronVersion {
 }
 
 function Read-NodeVersion {
-    param([string]$NodeExe)
+    param([string]$ResourcesDir)
 
-    if (Test-Path -LiteralPath $NodeExe) {
-        $version = (Get-Item -LiteralPath $NodeExe).VersionInfo.ProductVersion
-        if ($version -match "^\d+\.\d+\.\d+") {
-            return $Matches[0]
-        }
+    $candidates = @(Get-ChildItem -LiteralPath $ResourcesDir -Recurse -File -Filter "node.exe" -Depth 3 -ErrorAction Stop)
+    if ($candidates.Count -eq 0) {
+        throw "Could not find bundled node.exe under $($ResourcesDir)"
+    }
+    if ($candidates.Count -gt 1) {
+        $paths = ($candidates.FullName -join "`n")
+        throw "Found multiple node.exe candidates under $($ResourcesDir):`n$paths"
     }
 
-    throw "Could not determine bundled Node.js version from $NodeExe"
+    $version = $candidates[0].VersionInfo.ProductVersion
+    if ($version -match "^\d+\.\d+\.\d+") {
+        return $Matches[0]
+    }
+
+    throw "Could not determine bundled Node.js version from $($candidates[0].FullName)"
 }
 
 function Use-Asar {

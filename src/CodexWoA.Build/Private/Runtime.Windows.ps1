@@ -131,6 +131,15 @@ function Install-Arm64Node {
     )
 
     Write-Step "Replacing Node.js with win-arm64 v$NodeVersion"
+    $existingCandidates = @(Get-ChildItem -LiteralPath $ResourcesDir -Recurse -File -Filter "node.exe" -Depth 3 -ErrorAction Stop)
+    if ($existingCandidates.Count -eq 0) {
+        throw "Could not find existing node.exe under $($ResourcesDir) to replace"
+    }
+    if ($existingCandidates.Count -gt 1) {
+        $paths = ($existingCandidates.FullName -join "`n")
+        throw "Found multiple node.exe candidates under $($ResourcesDir):`n$paths"
+    }
+
     $zipName = "node-v$NodeVersion-win-arm64.zip"
     $zipPath = Join-Path $CacheDir $zipName
     $url = "https://nodejs.org/dist/v$NodeVersion/$zipName"
@@ -140,12 +149,12 @@ function Install-Arm64Node {
 
     $nodeDir = Join-Path $CacheDir "node-win-arm64-$NodeVersion"
     Expand-ZipClean $zipPath $nodeDir
-    $nodeExe = Get-ChildItem -LiteralPath $nodeDir -Recurse -File -Filter "node.exe" | Select-Object -First 1
-    if ($null -eq $nodeExe) {
+    $armNodeExe = Get-ChildItem -LiteralPath $nodeDir -Recurse -File -Filter "node.exe" | Select-Object -First 1
+    if ($null -eq $armNodeExe) {
         throw "Node archive did not contain node.exe"
     }
 
-    Copy-Item -LiteralPath $nodeExe.FullName -Destination (Join-Path $ResourcesDir "node.exe") -Force
+    Copy-Item -LiteralPath $armNodeExe.FullName -Destination $existingCandidates[0].FullName -Force
     Add-Replacement "node.exe" "arm64" $zipName
 }
 

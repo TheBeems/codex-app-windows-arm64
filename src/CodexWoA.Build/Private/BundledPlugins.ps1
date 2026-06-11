@@ -103,8 +103,7 @@ function Enable-ComputerUseX64Fallback {
     param([string]$ResourcesDir)
 
     $computerUseHelperCandidates = @(
-        (Join-Path $ResourcesDir "plugins\openai-bundled\plugins\computer-use\node_modules\%40oai\sky\bin\windows\codex-computer-use.exe"),
-        (Join-Path $ResourcesDir "plugins\openai-bundled\plugins\computer-use\node_modules\@oai\sky\bin\windows\codex-computer-use.exe")
+        (Join-Path $ResourcesDir "cua_node\bin\node_modules\@oai\sky\bin\windows\codex-computer-use.exe")
     )
 
     foreach ($helperPath in $computerUseHelperCandidates) {

@@ -68,7 +68,7 @@ function Invoke-BuildOrchestration {
     Normalize-PercentEncodedScopedPackageDirs $asarExtractDir "asar-scoped-package-dirs"
 
     $electronVersion = Read-ElectronVersion $appDir $asarExtractDir
-    $nodeVersion = Read-NodeVersion (Join-Path $resourcesDir "node.exe")
+    $nodeVersion = Read-NodeVersion $resourcesDir
     $script:Context.Report.versions.electron = $electronVersion
     $script:Context.Report.versions.node = $nodeVersion
 
