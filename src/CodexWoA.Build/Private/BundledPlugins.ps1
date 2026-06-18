@@ -101,21 +101,23 @@ function Rebuild-PluginClassicLevelArm64NativeModules {
     foreach ($classicLevelDir in $classicLevelDirs) {
         Push-Location $classicLevelDir.FullName
         try {
-            Invoke-Checked "pnpm" @(
-                "dlx",
-                "node-gyp@$($script:Context.Tools.NodeGyp)",
-                "configure",
-                "--arch=arm64"
-            )
+            Invoke-WithNodeGypLtoEnvironment {
+                Invoke-Checked "pnpm" @(
+                    "dlx",
+                    "node-gyp@$($script:Context.Tools.NodeGyp)",
+                    "configure",
+                    "--arch=arm64"
+                )
 
-            Remove-ClassicLevelMsvcLtoOptions $classicLevelDir.FullName
+                Remove-ClassicLevelMsvcLtoOptions $classicLevelDir.FullName
 
-            Invoke-Checked "pnpm" @(
-                "dlx",
-                "node-gyp@$($script:Context.Tools.NodeGyp)",
-                "build",
-                "--arch=arm64"
-            )
+                Invoke-Checked "pnpm" @(
+                    "dlx",
+                    "node-gyp@$($script:Context.Tools.NodeGyp)",
+                    "build",
+                    "--arch=arm64"
+                )
+            }
         }
         finally {
             Pop-Location
