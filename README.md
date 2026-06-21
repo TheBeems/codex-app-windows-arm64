@@ -5,9 +5,15 @@
 
 🌐 English | [한국어](README.ko.md)
 
-Codex App Windows ARM64 is an unofficial repackaging script for running the official Windows x64 Codex app on Windows on ARM. It takes an installed Microsoft Store Codex package, replaces the runtime and native payloads with ARM64-compatible builds where possible, and produces a locally signed ARM64 MSIX package.
+> **Archived:** OpenAI now provides the official Codex app for Windows with Windows on ARM support, so this unofficial repackaging repository is no longer needed. Install and update the official Codex app from Microsoft Store instead:
+>
+> ```powershell
+> winget install Codex -s msstore
+> ```
 
-This project is intended to be maintained until OpenAI provides official Windows ARM64 support for the Codex app.
+Codex App Windows ARM64 was an unofficial repackaging script for running the official Windows x64 Codex app on Windows on ARM. It took an installed Microsoft Store Codex package, replaced the runtime and native payloads with ARM64-compatible builds where possible, and produced a locally signed ARM64 MSIX package.
+
+This project is archived and kept only for historical reference.
 
 ## Disclaimer
 
@@ -15,7 +21,7 @@ This project is not affiliated with, endorsed by, sponsored by, or officially su
 
 OpenAI, Codex, and ChatGPT are trademarks of OpenAI. All other trademarks are the property of their respective owners.
 
-## Requirements
+## Legacy Requirements
 
 - A Windows on ARM device.
 - The official Codex app installed from Microsoft Store as the x64 package, or an official x64 Codex MSIX downloaded from Microsoft Store CDN.
@@ -26,7 +32,9 @@ OpenAI, Codex, and ChatGPT are trademarks of OpenAI. All other trademarks are th
 - Visual Studio C++ desktop build tools with the ARM64 C++ toolchain.
 - Internet access for downloading Electron, Node.js, Codex helper binaries, ripgrep, and native module build dependencies.
 
-## Quick Install From Release
+## Legacy Quick Install From Release
+
+The release-based install path below is retained for historical reference only. For new installations, use the official Codex app from Microsoft Store.
 
 With Scoop:
 
@@ -56,7 +64,7 @@ To remove the repack, uninstall Codex WoA through Windows Settings. The installe
 [Environment]::SetEnvironmentVariable("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE", $null, "User")
 ```
 
-## Build
+## Legacy Build
 
 Run the build wrapper from this repository:
 
@@ -114,9 +122,9 @@ The certificate is generated locally when needed and is not committed to the rep
 
 ## Current Support Status
 
-The package is a best-effort compatibility build for Windows on ARM. Basic app launch, login flow, conversation use, ARM64 `node-pty`, and ARM64 `rg.exe` replacement have been validated locally, but this is not a substitute for official OpenAI support.
+The package was a best-effort compatibility build for Windows on ARM. It is superseded by the official Codex app and should not be used for new installations.
 
-Reports and pull requests are welcome, especially for native dependency updates, helper binary replacement, packaging validation, and Windows on ARM runtime behavior.
+Issues and pull requests are no longer actively accepted because the repository is archived.
 
 ## Contributors
 

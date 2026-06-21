@@ -5,9 +5,15 @@
 
 🌐 [English](README.md) | 한국어
 
-Codex App Windows ARM64는 공식 Windows x64 Codex 앱을 Windows on ARM에서 실행하기 위한 비공식 재패키징 스크립트입니다. Microsoft Store에 설치된 Codex x64 패키지를 가져와 가능한 런타임과 네이티브 payload를 ARM64 호환 빌드로 교체하고, 로컬 자체 서명 ARM64 MSIX 패키지를 생성합니다.
+> **보관됨:** 이제 OpenAI 공식 Codex Windows 앱이 Windows on ARM을 지원하므로, 이 비공식 재패키징 저장소는 더 이상 필요하지 않습니다. 대신 Microsoft Store의 공식 Codex 앱을 설치하고 업데이트하세요.
+>
+> ```powershell
+> winget install Codex -s msstore
+> ```
 
-이 프로젝트는 OpenAI가 Codex 앱의 공식 Windows ARM64 지원을 제공할 때까지 유지될 예정입니다.
+Codex App Windows ARM64는 공식 Windows x64 Codex 앱을 Windows on ARM에서 실행하기 위한 비공식 재패키징 스크립트였습니다. Microsoft Store에 설치된 Codex x64 패키지를 가져와 가능한 런타임과 네이티브 payload를 ARM64 호환 빌드로 교체하고, 로컬 자체 서명 ARM64 MSIX 패키지를 생성했습니다.
+
+이 프로젝트는 보관되었으며, 과거 참고용으로만 남겨 둡니다.
 
 ## Disclaimer
 
@@ -15,7 +21,7 @@ Codex App Windows ARM64는 공식 Windows x64 Codex 앱을 Windows on ARM에서 
 
 OpenAI, Codex 및 ChatGPT는 OpenAI의 상표입니다. 그 외 모든 상표는 각 소유자의 자산입니다.
 
-## 요구사항
+## 과거 요구사항
 
 - Windows on ARM 장치.
 - Microsoft Store에서 설치한 공식 Codex x64 앱 또는 Microsoft Store CDN에서 다운로드한 공식 x64 Codex MSIX.
@@ -26,7 +32,9 @@ OpenAI, Codex 및 ChatGPT는 OpenAI의 상표입니다. 그 외 모든 상표는
 - ARM64 C++ toolchain이 포함된 Visual Studio C++ desktop build tools.
 - Electron, Node.js, Codex helper 바이너리, ripgrep, 네이티브 모듈 빌드 의존성 다운로드를 위한 인터넷 연결.
 
-## Release에서 빠르게 설치
+## 과거 Release 설치
+
+아래 release 기반 설치 방법은 과거 참고용으로만 남겨 둡니다. 새로 설치할 때는 Microsoft Store의 공식 Codex 앱을 사용하세요.
 
 Scoop 사용:
 
@@ -56,7 +64,7 @@ Install.bat
 [Environment]::SetEnvironmentVariable("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE", $null, "User")
 ```
 
-## 빌드
+## 과거 빌드
 
 이 저장소에서 빌드 래퍼를 실행합니다.
 
@@ -100,9 +108,9 @@ Build-CodexWoA.bat -SourceMode StoreMsix -Force
 
 ## 현재 지원 상태
 
-이 패키지는 Windows on ARM을 위한 best-effort 호환성 빌드입니다. 앱 실행, 로그인 흐름, 대화 사용, ARM64 `node-pty`, ARM64 `rg.exe` 교체는 로컬에서 검증했지만, 공식 OpenAI 지원을 대체하지는 않습니다.
+이 패키지는 Windows on ARM을 위한 best-effort 호환성 빌드였습니다. 이제 공식 Codex 앱이 대체하므로 새 설치에는 사용하지 않는 것이 좋습니다.
 
-네이티브 의존성 업데이트, helper 바이너리 교체, 패키징 검증, Windows on ARM 런타임 동작과 관련된 제보와 pull request를 환영합니다.
+저장소가 보관되므로 issue와 pull request는 더 이상 적극적으로 받지 않습니다.
 
 ## 기여자
 
